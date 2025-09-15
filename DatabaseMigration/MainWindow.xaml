@@ -1,0 +1,64 @@
+﻿<Window x:Class="DatabaseMigration.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:local="clr-namespace:DatabaseMigration"
+        mc:Ignorable="d"
+        Title="数据库迁移工具" Height="480" Width="800">
+    <Grid Margin="10">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+
+        <GroupBox Header="源数据库 (SQL Server)" Grid.Row="0" Grid.Column="0" Margin="5">
+            <StackPanel Margin="5">
+                <TextBlock Text="服务器:"/>
+                <TextBox x:Name="SourceServer" Text="192.168.1.111\server2008"/>
+                <TextBlock Text="数据库:"/>
+                <TextBox x:Name="SourceDb" Text="pmsmasterdev"/>
+                <TextBlock Text="用户名:"/>
+                <TextBox x:Name="SourceUser" Text="jxd"/>
+                <TextBlock Text="密码:"/>
+                <PasswordBox x:Name="SourcePassword" Password="jxd598"/>
+            </StackPanel>
+        </GroupBox>
+
+        <GroupBox Header="目标数据库 (PostgreSQL)" Grid.Row="0" Grid.Column="1" Margin="5">
+            <StackPanel Margin="5">
+                <TextBlock Text="服务器:"/>
+                <TextBox x:Name="TargetServer" Text="192.168.1.102"/>
+                <TextBlock Text="数据库:"/>
+                <TextBox x:Name="TargetDb" Text="demo"/>
+                <TextBlock Text="用户名:"/>
+                <TextBox x:Name="TargetUser" Text="postgres"/>
+                <TextBlock Text="密码:"/>
+                <PasswordBox x:Name="TargetPassword" Password="123456"/>
+            </StackPanel>
+        </GroupBox>
+
+        <StackPanel Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2" Orientation="Horizontal" Margin="5">
+            <TextBlock Text="迁移环境:" VerticalAlignment="Center" Margin="0,0,5,0"/>
+            <ComboBox x:Name="MigrationModeComboBox" SelectedIndex="0" Width="250">
+                <ComboBoxItem Content="开发测试环境 (复制10行数据)"/>
+                <ComboBoxItem Content="生产环境 (仅迁移结构)"/>
+            </ComboBox>
+        </StackPanel>
+
+        <Button x:Name="MigrateButton" Content="开始迁移" Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2" Margin="5" Click="MigrateButton_Click"/>
+
+        <ProgressBar x:Name="MigrationProgressBar" Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="2" Margin="5" Height="20"/>
+        <TextBlock x:Name="StatusText" Grid.Row="4" Grid.Column="0" Grid.ColumnSpan="2" Margin="5"/>
+
+        <TextBox x:Name="ReportTextBox" Grid.Row="5" Grid.Column="0" Grid.ColumnSpan="2" Margin="5" IsReadOnly="True" VerticalScrollBarVisibility="Auto"/>
+    </Grid>
+</Window>
