@@ -259,7 +259,7 @@ JOIN sys.views rv ON rv.object_id = d.referenced_id
                 return string.Empty;
 
             // 在非字符串/注释中移除 dbo 前缀（例如dbo.Table 或dbo.fn）
-            viewDefinition = MigrationUtils.RemoveSchemaPrefix(viewDefinition, "dbo.");
+            viewDefinition = MigrationUtils.RemoveSchemaPrefix(viewDefinition);
 
             // 1) 先按物理行切分，再把“字符串字面量中的换行”合并为同一逻辑行
             var lines = viewDefinition.Replace("\r\n", "\n").Split('\n');
@@ -280,13 +280,13 @@ JOIN sys.views rv ON rv.object_id = d.referenced_id
                 if (inBlockComment)
                 {
                     outSb.AppendLine(line);
-                    if (MigrationUtils.HasBlockCommentEnd(line)) inBlockComment = false;
+                    if (MigrationUtils.IsEndWithBlockComment(line)) inBlockComment = false;
                     continue;
                 }
                 // 块注释开始，则直接输出该行，并根据当前行是否有结束符判断是否继续处于块注释中
-                if (MigrationUtils.HasBlockCommentStart(line))
+                if (MigrationUtils.IsStartWithBlockComment(line))
                 {
-                    inBlockComment = !MigrationUtils.HasBlockCommentEnd(line);
+                    inBlockComment = !MigrationUtils.IsEndWithBlockComment(line);
                     outSb.AppendLine(line);
                     continue;
                 }

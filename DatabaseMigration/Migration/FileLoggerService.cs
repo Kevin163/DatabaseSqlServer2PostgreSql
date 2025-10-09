@@ -29,11 +29,23 @@ namespace DatabaseMigration.Migration
                 ))
                 .CreateLogger() as Logger;
         }
-
+        /// <summary>
+        /// 记录日志
+        /// </summary>
+        /// <param name="message"></param>
         public void Log(string message)
         {
             if (_disposed) return;
             _logger?.Information(message);
+        }
+        /// <summary>
+        /// 记录错误日志
+        /// </summary>
+        /// <param name="message"></param>
+        public void LogError(string message)
+        {
+            if (_disposed) return;
+            _logger?.Error(message);
         }
 
         public void Dispose()

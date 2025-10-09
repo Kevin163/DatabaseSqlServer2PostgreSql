@@ -20,7 +20,7 @@ namespace DatabaseMigration
             ReportTextBox.Text = ""; // Clear previous log file path
 
             _logger = new FileLoggerService();
-            ReportTextBox.Text = $"日志文件路径: {_logger.LogFilePath}";
+            ReportTextBox.Text = _logger.LogFilePath;
 
             try
             {
@@ -53,6 +53,31 @@ namespace DatabaseMigration
         private string GetTargetConnectionString()
         {
             return $"Host={TargetServer.Text};Database={TargetDb.Text};Username={TargetUser.Text};Password={TargetPassword.Password};";
+        }
+
+        /// <summary>
+        /// 点击 ReportTextBox 时将其内容复制到剪贴板并提示
+        /// </summary>
+        /// <param name="sender"></param>
+        /// <param name="e"></param>
+        private void ReportTextBox_Click(object sender, System.Windows.Input.MouseButtonEventArgs e)
+        {
+            try
+            {
+                var text = ReportTextBox.Text;
+                if (string.IsNullOrWhiteSpace(text))
+                {
+                    MessageBox.Show(this, "没有可复制的内容。", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+                    return;
+                }
+
+                Clipboard.SetText(text);
+                MessageBox.Show(this, "已复制到剪贴板。", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, $"复制到剪贴板失败: {ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
         }
     }
 }

@@ -37,6 +37,7 @@ namespace DatabaseMigration.Migration
 
                             new TableMigrator(_logger, _migrationMode).Migrate(sourceConnection, targetConnection);
                             new ViewMigrator(_logger).Migrate(sourceConnection, targetConnection);
+                            new StoredProcedureMigrator(_logger).Migrate(sourceConnection, targetConnection);
                             // 其它迁移器同理
                         }
                     }

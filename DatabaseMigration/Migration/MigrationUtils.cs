@@ -2,6 +2,8 @@
 using System.Data;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Windows.Documents;
+using static System.Runtime.InteropServices.JavaScript.JSType;
 
 namespace DatabaseMigration.Migration
 {
@@ -111,17 +113,222 @@ namespace DatabaseMigration.Migration
             return string.Empty;
         }
         /// <summary>
+        /// 从指定的 SQL 脚本中提取第一个完整的 SQL 语句
+        /// 以便整个语句可以作为一个单元进行转换,如一个select语句，或一个if语句块
+        /// 循环处理每一行，先判断每一行是否是一些特殊情况，是则进行对应的特殊情况处理，否则直接将该行加入firstSql
+        /// </summary>
+        /// <param name="sql"></param>
+        /// <returns></returns>
+        public static (string firstSql,string otherSql) GetFirstCompleteSqlSentence(string sql)
+        {
+            if (string.IsNullOrWhiteSpace(sql)) return (sql, string.Empty);
+            //先将\r\n统一为\n，方便后续处理
+            sql = sql.Replace("\r\n", "\n");
+            var lines = sql.Split('\n', StringSplitOptions.None);
+            var firstSql = new StringBuilder();
+            var otherSql = new StringBuilder();
+
+            var isInBlockComment = false; // 标志当前是否在块注释内，此语句包含从/*开始，到*/结束的所有行
+            var isInIfBlock = false; // 标志当前是否在 if 块内，此语句包含从if开始，下面的一个begin end块或者是一个完整的其他语句
+            var isInBeginEndBlock = false; // 标志当前是否在 begin end 块内，此语句包含从begin开始，到end结束的所有行
+            var isInCreateProcedureBlock = false; // 标志当前是否在 create procedure 块内,此语句包含从create procedure开始，到as结束的所有行
+
+            int i = 0;
+            for (; i < lines.Length; i++)
+            {
+                var line = lines[i];
+                #region 处理create procedure 块，从create procedure开始，到as结束
+                if (IsStartWithCreateProcedure(line))
+                {
+                    isInCreateProcedureBlock = true;
+                    firstSql.AppendLine(line);
+                    continue;
+                }
+                if(isInCreateProcedureBlock)
+                {
+                    firstSql.AppendLine(line);
+                    if (IsEndWithAs(line))
+                    {
+                        isInCreateProcedureBlock = false;
+                        // create procedure 块结束，认为当前完整语句已经结束，跳出循环
+                        break;
+                    }
+                    continue;
+                }
+                #endregion
+                #region 处理块注释的开始和结束
+                // 处理块注释的开始
+                if (IsStartWithBlockComment(line))
+                {
+                    isInBlockComment = true;
+                    firstSql.AppendLine(line);
+                    // 如果当前行同时包含块注释的开始和结束标记，则将该行加入 firstSql, 并且认为当前完整语句已经结束，跳出循环
+                    if (IsEndWithBlockComment(line))
+                    {
+                        isInBlockComment = false;
+                        break;
+                    }
+                    continue;
+                }
+                // 如果已经在块注释内，并且当前行不是块注释的结束标记，则将该行加入 firstSql，继续处理后续行
+                if (isInBlockComment)
+                {
+                    firstSql.AppendLine(line);
+                    // 如果当前行包含块注释的结束标记，则将该行加入 firstSql, 并且认为当前完整语句已经结束，跳出循环
+                    if (IsEndWithBlockComment(line))
+                    {
+                        isInBlockComment = false;
+                        break;
+                    }
+                    continue;
+                }
+                #endregion
+                #region 处理if语句块，从if开始，到下面的一个begin end块，或者是一个完整的其他语句
+                // 如果当前语句是if开头的语句块，则设置标志，并将该行加入 firstSql，继续处理后续行，直到遇到END标记
+                if (IsStartWithIf(line))
+                {
+                    //如果当前语句是if开头，并且之前已经有firstSql了，则认为之前的语句已经完整，当前if语句算是其他语句，所以将i-1后直接退出循环
+                    if (firstSql.Length > 0)
+                    {
+                        i--;
+                        break;
+                    }
+                    isInIfBlock = true;
+                    firstSql.AppendLine(line);
+                    continue;
+                }
+                // 处理if语句后面的begin end块
+                if (isInIfBlock)
+                {
+                    if (IsStartWithBegin(line))
+                    {
+                        isInBeginEndBlock = true;
+                        firstSql.AppendLine(line);
+                        continue;
+                    }
+                    // 如果已经在if 的begin end块内，并且当前行就是end标记，则将该行加入 firstSql，当前完整语句就是if块，后续的都算 otherSql
+                    if (isInBeginEndBlock && IsEndWithEnd(line))
+                    {
+                        firstSql.AppendLine(line);
+                        break;
+                    }
+                    // 如果已经在if 块内,则将该行加入 firstSql，继续处理后续行
+                    firstSql.AppendLine(line);
+                    continue;
+                }
+                #endregion
+                //如果当前没有在特殊状态下，并且当前行是一个新语句的开始，则认为之前的语句是已经完整的了，将当前行认为是其他语句，所以将i-1后直接退出循环
+                if (firstSql.Length > 0 && IsNewSqlSentenceStart(line))
+                {
+                    i--;
+                    break;
+                }
+                // 其他情况下，则表示当前行是普通行算是firstSql的一部分，然后继续处理后续行
+                firstSql.AppendLine(line);
+            }
+            //跳出循环，则说明已经找到一个完事的sql语句块，后续的都算otherSql
+            //由于跳出循环时，后面的i++不会执行，所以本次循环的初始语句中需要补一次，否则语句会有重复
+            for (i++; i < lines.Length -1; i++)
+            {
+                otherSql.AppendLine(lines[i]);
+            }
+            //最后一行单独处理，避免多出一个换行
+            if (i == lines.Length -1)
+            {
+                otherSql.Append(lines[i]);
+            }
+
+            return (firstSql.ToString(), otherSql.ToString());
+        }
+        /// <summary>
+        /// 从指定的if语句块中提取if条件语句
+        /// 如
+        /// IF NOT EXISTS(SELECT * FROM syscolumns WHERE id=OBJECT_ID('hotel') AND name = 'customerStatus')
+        /// BEGIN
+        /// ALTER TABLE hotel ADD customerStatus VARCHAR(2) NOT NULL DEFAULT '0'
+        /// END
+        /// 则提取后的
+        /// 1. if条件语句为:IF NOT EXISTS(SELECT * FROM syscolumns WHERE id=OBJECT_ID('hotel') AND name = 'customerStatus')
+        /// 2. 其他语句为: BEGIN ALTER TABLE hotel ADD customerStatus VARCHAR(2) NOT NULL DEFAULT '0' END
+        /// </summary>
+        /// <param name="sql"></param>
+        /// <returns></returns>
+        public static (string ifConditionSql,string other) GetIfConditionSql(string sql)
+        {
+            if (string.IsNullOrWhiteSpace(sql)) return (string.Empty, string.Empty);
+
+            // Match the first IF line (from start of string or line) up to the first newline (preserve original spacing)
+            var pattern = @"^\s*if\b.*?(?:\r\n|\n|$)";
+            var m = Regex.Match(sql, pattern, RegexOptions.IgnoreCase | RegexOptions.Multiline);
+            if (!m.Success)
+            {
+                return (string.Empty, sql);
+            }
+
+            // Extract the IF condition line without trailing newline
+            var ifLine = m.Value.TrimEnd('\r', '\n');
+            // The remainder (other) is the substring after the matched IF line
+            var other = sql.Substring(m.Index + m.Length);
+            return (ifLine, other);
+        }
+        /// <summary>
         /// 是否包含块注释的开始标记（/*）
         /// </summary>
         /// <param name="s"></param>
         /// <returns></returns>
-        public static bool HasBlockCommentStart(string s) => s.TrimStart().StartsWith("/*");
+        public static bool IsStartWithBlockComment(string s) => s.TrimStart().StartsWith("/*");
         /// <summary>
         /// 是否包含块注释的结束标记（*/）
         /// </summary>
         /// <param name="s"></param>
         /// <returns></returns>
-        public static bool HasBlockCommentEnd(string s) => s.TrimEnd().EndsWith("*/");
+        public static bool IsEndWithBlockComment(string s) => s.TrimEnd().EndsWith("*/");
+        /// <summary>
+        /// 是否包含 if 语句的开始标记（if）
+        /// </summary>
+        /// <param name="s"></param>
+        /// <returns></returns>
+        public static bool IsStartWithIf(string s) => s.TrimStart().StartsWith("if", StringComparison.InvariantCultureIgnoreCase);
+        /// <summary>
+        /// 是否包含begin end语句块的开始标记（begin）
+        /// </summary>
+        /// <param name="s"></param>
+        /// <returns></returns>
+        public static bool IsStartWithBegin(string s) => s.TrimStart().StartsWith("begin", StringComparison.InvariantCultureIgnoreCase);
+        /// <summary>
+        /// 是否包含begin end语句块的结束标记（end）
+        /// </summary>
+        /// <param name="s"></param>
+        /// <returns></returns>
+        public static bool IsEndWithEnd(string s) => s.TrimStart().StartsWith("end", StringComparison.InvariantCultureIgnoreCase);
+        /// <summary>
+        /// 判断指定行是否为新 SQL 语句的开始
+        /// </summary>
+        /// <param name="s"></param>
+        /// <returns></returns>
+        public static bool IsNewSqlSentenceStart(string s)
+        {
+            if (string.IsNullOrWhiteSpace(s)) return false;
+            var trimmed = s.TrimStart();
+            // 粗略判断新语句的开始：以常见SQL关键字开头的行
+            return Regex.IsMatch(trimmed, @"^(SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|IF|BEGIN|WITH|DECLARE|EXEC|EXECUTE)\b", RegexOptions.IgnoreCase);
+        }
+        /// <summary>
+        /// 是否为 CREATE PROCEDURE 语句的开始行
+        /// </summary>
+        /// <param name="s"></param>
+        /// <returns></returns>
+        public static bool IsStartWithCreateProcedure(string s)
+        {
+            if (string.IsNullOrWhiteSpace(s)) return false;
+            return Regex.IsMatch(s, @"^\s*create\s+procedure\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        }
+        /// <summary>
+        /// 是否包含as这个单独语句
+        /// </summary>
+        /// <param name="s"></param>
+        /// <returns></returns>
+        public static bool IsEndWithAs(string s) => s.TrimStart().StartsWith("as", StringComparison.InvariantCultureIgnoreCase);
         /// <summary>
         /// 是否为可忽略的头部语句（SET 语句或 GO 分隔符）
         /// 有些 SQL Server 对象定义脚本会包含 SET 语句或 GO 分隔符，这些在 PostgreSQL 中没有意义，可以忽略。
@@ -181,7 +388,7 @@ namespace DatabaseMigration.Migration
         /// 在非字符串/注释中移除指定 schema 前缀（例如dbo.），不会修改注释或字符串内的文本
         /// 例如 "SELECT dbo.Table.Column, 'dbo.test', /* dbo.abc */ FROM dbo.Table" -> "SELECT Table.Column, 'dbo.test', /* dbo.abc */ FROM Table"
         /// </summary>
-        public static string RemoveSchemaPrefix(string sql, string schema)
+        public static string RemoveSchemaPrefix(string sql, string schema="dbo.")
         {
             if (string.IsNullOrEmpty(sql) || string.IsNullOrWhiteSpace(schema)) return sql;
 
@@ -196,10 +403,11 @@ namespace DatabaseMigration.Migration
         }
         /// <summary>
         /// 执行sp_helptext来获取对象定义，同时处理一行被sp_helptext截断的情况
+        /// 由于sp_helptext返回的每行都会带有\r\n，为了方便，全部都替换为空后再进行拼接，由程序判断是否合并行和换行
         /// </summary>
         /// <param name="connection">已打开的 SQL Server 连接。</param>
         /// <param name="name">对象名称</param>
-        /// <returns>对象的定义脚本文本（包含原始换行与格式）；若对象不存在、无权限或不可脚本化（例如被加密）则返回空字符串。</returns>
+        /// <returns>对象的定义脚本文本（包含原始换行与格式）；若对象不存在、无权限或不可脚本化（例如被加密）则返回空字符串</returns>
         private static string TrySpHelpText(SqlConnection connection, string name)
         {
             var sb = new StringBuilder();
@@ -215,6 +423,7 @@ namespace DatabaseMigration.Migration
                 while (reader.Read())
                 {
                     var line = reader.GetString(0);
+                    line = line.Replace("\r\n", ""); // 先将\r\n统一去掉，方便后续处理
                     // 处理sp_helptext返回的行被截断的情况（超过255字符的行会被截断）
                     if (isSplitedLine)
                     {
