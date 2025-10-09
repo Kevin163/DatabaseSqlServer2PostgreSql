@@ -62,5 +62,50 @@ END
             Assert.False(string.IsNullOrWhiteSpace(other));
             Assert.Contains("HotelPos", other);
         }
+
+        /// <summary>
+        /// 新增测试：复杂的 IF EXISTS 包含子查询和 UNION ALL，应该作为第一个完整语句返回（包含 BEGIN/END 内容）。
+        /// </summary>
+        [Fact]
+        public void GetFirstCompleteSqlSentence_ComplexIfExistsWithSubquery_ReturnsFirstIfBlock()
+        {
+            var sql = @"if exists(select distinct * from (  
+    select hotelCode as hid from dbo.posSmMappingHid  
+    union all  
+    select groupid from dbo.posSmMappingHid)a  
+    where ISNULL(a.hid,'')!='' and hid not in(select hid from dbo.hotelProducts where productCode='ipos'))  
+begin  
+    insert into hotelProducts(hid,productCode)  
+    select distinct a.hid,'ipos' from (  
+    select hotelCode as hid from dbo.posSmMappingHid  
+    union all  
+    select groupid from dbo.posSmMappingHid)a  
+    where ISNULL(a.hid,'')!='' and hid not in(select hid from dbo.hotelProducts where productCode='ipos')  
+end  
+if not exists(select * from INFORMATION_SCHEMA.columns where table_name='posSmMappingHid' and column_name = 'memberVersion')  
+begin  
+ ALTER TABLE posSmMappingHid add memberVersion varchar(10) null,memberInternetUrl varchar(200) null,BsPmsGrpId varchar(6) null,BsPmsChannelCode varchar(30),BsPmsChannelKey varchar(60)  
+end  ";
+
+            var (first, other) = MigrationUtils.GetFirstCompleteSqlSentence(sql);
+            var expectedFirst = @"if exists(select distinct * from (  
+    select hotelCode as hid from dbo.posSmMappingHid  
+    union all  
+    select groupid from dbo.posSmMappingHid)a  
+    where ISNULL(a.hid,'')!='' and hid not in(select hid from dbo.hotelProducts where productCode='ipos'))  
+begin  
+    insert into hotelProducts(hid,productCode)  
+    select distinct a.hid,'ipos' from (  
+    select hotelCode as hid from dbo.posSmMappingHid  
+    union all  
+    select groupid from dbo.posSmMappingHid)a  
+    where ISNULL(a.hid,'')!='' and hid not in(select hid from dbo.hotelProducts where productCode='ipos')  
+end  
+";
+
+            Assert.Equal(expectedFirst, (first ?? string.Empty));
+            Assert.False(string.IsNullOrWhiteSpace(other));
+            Assert.Contains("memberVersion", other);
+        }
     }
 }

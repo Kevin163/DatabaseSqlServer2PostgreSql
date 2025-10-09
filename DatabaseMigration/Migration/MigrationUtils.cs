@@ -257,19 +257,128 @@ namespace DatabaseMigration.Migration
         {
             if (string.IsNullOrWhiteSpace(sql)) return (string.Empty, string.Empty);
 
-            // Match the first IF line (from start of string or line) up to the first newline (preserve original spacing)
-            var pattern = @"^\s*if\b.*?(?:\r\n|\n|$)";
-            var m = Regex.Match(sql, pattern, RegexOptions.IgnoreCase | RegexOptions.Multiline);
+            // Normalize newlines for easier processing
+            var norm = sql.Replace("\r\n", "\n");
+
+            // Find the first IF (at start of string or after leading whitespace)
+            var m = Regex.Match(norm, @"^\s*if\b", RegexOptions.IgnoreCase | RegexOptions.Multiline);
             if (!m.Success)
             {
                 return (string.Empty, sql);
             }
 
-            // Extract the IF condition line without trailing newline
-            var ifLine = m.Value.TrimEnd('\r', '\n');
-            // The remainder (other) is the substring after the matched IF line
-            var other = sql.Substring(m.Index + m.Length);
-            return (ifLine, other);
+            int startIndex = m.Index;
+
+            // Look for the first '(' after the IF keyword to decide whether to parse a parenthesized condition
+            int firstParen = -1;
+            for (int i = m.Index + m.Length; i < norm.Length; i++)
+            {
+                char c = norm[i];
+                if (c == '(')
+                {
+                    firstParen = i;
+                    break;
+                }
+                if (c == '\n')
+                {
+                    // reached end of the first line without finding '(', stop searching
+                    break;
+                }
+            }
+
+            if (firstParen == -1)
+            {
+                // No opening parenthesis on the IF line: return the first line as the condition
+                var lineEnd = norm.IndexOf('\n', m.Index);
+                if (lineEnd < 0) lineEnd = norm.Length;
+                var cond = norm.Substring(startIndex, lineEnd - startIndex).TrimEnd('\r', '\n');
+                var other = norm.Substring(lineEnd < norm.Length ? lineEnd + 1 : lineEnd);
+                return (cond, other);
+            }
+
+            // We have an opening parenthesis; find the matching closing parenthesis, taking quotes into account
+            int depth = 0;
+            bool inSingle = false;
+            bool inDouble = false;
+            int closeIndex = -1;
+            for (int i = firstParen; i < norm.Length; i++)
+            {
+                char c = norm[i];
+                if (c == '\'' && !inDouble)
+                {
+                    // toggle single quote unless escaped by another single (T-SQL uses '' to escape)
+                    // handle doubled single quotes: skip the next quote if present
+                    if (inSingle && i + 1 < norm.Length && norm[i + 1] == '\'')
+                    {
+                        i++; // skip escaped quote inside literal
+                        continue;
+                    }
+                    inSingle = !inSingle;
+                    continue;
+                }
+                if (c == '"' && !inSingle)
+                {
+                    inDouble = !inDouble;
+                    continue;
+                }
+
+                if (inSingle || inDouble) continue;
+
+                if (c == '(') depth++;
+                else if (c == ')')
+                {
+                    depth--;
+                    if (depth == 0)
+                    {
+                        closeIndex = i;
+                        break;
+                    }
+                }
+            }
+
+            if (closeIndex == -1)
+            {
+                // parenthesis not balanced; fall back to returning first line
+                var lineEnd = norm.IndexOf('\n', m.Index);
+                if (lineEnd < 0) lineEnd = norm.Length;
+                var cond = norm.Substring(startIndex, lineEnd - startIndex).TrimEnd('\r', '\n');
+                var other = norm.Substring(lineEnd < norm.Length ? lineEnd + 1 : lineEnd);
+                return (cond, other);
+            }
+
+            // Include any trailing spaces/tabs after the closing parenthesis but stop before newline
+            int endIndex = closeIndex;
+
+            // Determine the end of the condition: examine the remainder of the current line (from closeIndex+1 to the next newline)
+            int nextNewline = norm.IndexOf('\n', closeIndex + 1);
+            int segmentEnd = (nextNewline >= 0) ? nextNewline - 1 : norm.Length - 1;
+
+            // Extract the segment between the closing parenthesis and the line end
+            var segment = (segmentEnd >= closeIndex + 1) ? norm.Substring(closeIndex + 1, segmentEnd - (closeIndex + 1) + 1) : string.Empty;
+
+            // If the segment (after trimming leading spaces) starts with a SQL keyword that should be considered part of 'other' (e.g., BEGIN),
+            // then the condition ends at the last space before that keyword; otherwise include the entire segment as part of the condition.
+            var segTrimStart = segment.TrimStart();
+            if (!string.IsNullOrEmpty(segTrimStart) && Regex.IsMatch(segTrimStart, "^(BEGIN|CREATE|ALTER|DROP|IF)\\b", RegexOptions.IgnoreCase))
+            {
+                // end condition at the position before the first non-space character of the segment
+                int firstNonSpace = closeIndex + 1 + (segment.Length - segment.TrimStart().Length);
+                endIndex = firstNonSpace - 1;
+            }
+            else
+            {
+                // include the entire segment (this will capture cases like " IS NULL")
+                endIndex = segmentEnd;
+            }
+
+            var condition = norm.Substring(startIndex, endIndex - startIndex + 1);
+
+            // The 'other' begins after the newline following the condition (if any). If condition ends on its own line, skip that newline.
+            int otherStart = endIndex + 1;
+            if (otherStart < norm.Length && norm[otherStart] == '\n') otherStart++;
+            var otherSql = otherStart < norm.Length ? norm.Substring(otherStart) : string.Empty;
+
+            return (condition, otherSql);
         }
         /// <summary>
         /// 是否包含块注释的开始标记（/*）

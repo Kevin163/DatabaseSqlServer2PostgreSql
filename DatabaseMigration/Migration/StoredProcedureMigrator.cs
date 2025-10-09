@@ -2,6 +2,7 @@ using Microsoft.Data.SqlClient;
 using Npgsql;
 using System.Data;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace DatabaseMigration.Migration
 {
@@ -335,60 +336,95 @@ ORDER BY ORDINAL_POSITION;";
         /// <returns></returns>
         private static (string convertedSql, string needConvertSql,string endSql) ConvertIfConditionSql(string ifConditionSql)
         {
+            string tableName, columnName, indexName;
             // 处理 IF NOT EXISTS(SELECT * FROM syscolumns WHERE ID = OBJECT_ID('HotelPos') AND name = 'Id') 类型的语句
-            if (IfConditionUtils.TryParseNotExistsSysColumnsCondition(ifConditionSql, out var alterTableName, out var columnName))
+            if (IfConditionUtils.TryParseNotExistsSysColumnsCondition(ifConditionSql, out tableName, out columnName))
             {
-                return ($"IF NOT EXISTS ( SELECT 1 FROM information_schema.columns WHERE table_name = '{alterTableName}' AND column_name = '{columnName}') THEN \n",
+                return ($"IF NOT EXISTS ( SELECT 1 FROM information_schema.columns WHERE table_name = '{tableName}' AND column_name = '{columnName}') THEN \n",
+                    "",
+                    "END IF;\n");
+            }
+            // 处理 if not exists(select * from INFORMATION_SCHEMA.columns where table_name='posSmMappingHid' and column_name = 'memberVersion') 
+            if(IfConditionUtils.TryParseNotExistsInformationSchemaColumnsCondition(ifConditionSql,out tableName,out columnName))
+            {
+                return ($"IF NOT EXISTS ( SELECT 1 FROM information_schema.columns WHERE table_name = '{tableName}' AND column_name = '{columnName}') THEN \n",
                     "",
                     "END IF;\n");
             }
             //处理 IF OBJECT_ID('HuiYiMapping') IS NULL 这类语句
-            if (IfConditionUtils.TryParseIsObjectIdNullCondition(ifConditionSql,out var createdTableName))
+            if (IfConditionUtils.TryParseIsObjectIdNullCondition(ifConditionSql,out tableName))
             {
-                return ($"IF to_regclass('{createdTableName}') IS NULL THEN \n",
+                return ($"IF to_regclass('{tableName}') IS NULL THEN \n",
                     "",
                     "END IF;\n");
             }
-            //处理IF NOT EXISTS(SELECT * FROM sysPara WHERE code = 'TryHotelIdForGroup')  这类语句
-            if(IfConditionUtils.TryParseSelectFromTableWhenWhereOneEqualCondition(ifConditionSql,out string selectTableName,out WhereConditionItem whereItem))
+            // 处理 IF NOT EXISTS (SELECT * FROM sys.all_objects WHERE object_id = OBJECT_ID(N'dbo.commonInvoiceInfo') AND type IN ('U'))
+            if(IfConditionUtils.TryParseNotExistsSelectFromAllObjectsCondition(ifConditionSql,out tableName))
             {
-                return ($"IF NOT EXISTS ( SELECT 1 FROM {selectTableName} WHERE {whereItem.ColumnName} = '{whereItem.Value}') THEN \n",
+                return ($"IF to_regclass('{tableName}') IS NULL THEN \n",
+                   "",
+                   "END IF;\n");
+            }
+            //处理IF NOT EXISTS(SELECT * FROM sysPara WHERE code = 'TryHotelIdForGroup')  这类语句
+            if (IfConditionUtils.TryParseSelectFromTableWhenWhereOneEqualCondition(ifConditionSql,out tableName, out WhereConditionItem whereItem))
+            {
+                return ($"IF NOT EXISTS ( SELECT 1 FROM {tableName} WHERE {whereItem.ColumnName} = '{whereItem.Value}') THEN \n",
                     "",
                     "END IF;\n");
             }
             //处理 if not exists(select id from sysobjects where name = 'ImeiMappingHid') 这类语句
             if(IfConditionUtils.TryParseNotExistsSelectFromSysObjectsCondition(ifConditionSql,out string objectName))
             {
-                return ($"IF to_regclass('{createdTableName}') IS NULL THEN \n",
+                return ($"IF to_regclass('{objectName}') IS NULL THEN \n",
                    "",
                    "END IF;\n");
             }
             // 处理 IF NOT EXISTS( SELECT * from sysobjects where name =( SELECT TOP 1 name FROM sys.indexes  WHERE is_primary_key = 1   AND object_id  = Object_Id('posSmMappingHid') AND name='PK_posSm_20190808912' ) )  这类语句
-            return ("", $"{ifConditionSql} \n","");
-        }
-        #endregion
-
-        #region 生成占位体：可编译，包含原始 T-SQL 供人工迁移
-        /// <summary>
-        /// 生成占位体：可编译，包含原始 T-SQL 供人工迁移
-        /// </summary>
-        /// <param name="tsql"></param>
-        /// <returns></returns>
-        private static string BuildStubBodyFromTsql(string tsql)
-        {
-            var sb = new StringBuilder();
-            sb.AppendLine("RAISE NOTICE 'This procedure was migrated as a stub; manual translation required.';");
-            sb.AppendLine("-- Original T-SQL below (for reference):");
-            if (!string.IsNullOrEmpty(tsql))
+            if(IfConditionUtils.TryParseNotExistsSelectFromSysIndexCondition(ifConditionSql,out tableName,out indexName))
             {
-                var norm = tsql.Replace("\r\n", "\n").Replace("\r", "\n");
-                foreach (var line in norm.Split('\n'))
-                {
-                    sb.Append("-- ");
-                    sb.AppendLine(line);
-                }
+                return ($"IF NOT EXISTS ( select * from pg_class where relname = '{indexName}' and relkind = 'i') THEN \n",
+                   "",
+                   "END IF;\n");
             }
-            return sb.ToString();
+            // 处理 IF EXISTS(SELECT * FROM syscolumns WHERE id=OBJECT_ID('HotelUserWxInfo') AND name = 'NickName' AND length = 28)
+            if(IfConditionUtils.TryParseExistsSysColumnsCondition(ifConditionSql,out tableName,out columnName,out int? length))
+            {
+                return ($"IF EXISTS ( SELECT 1 FROM information_schema.columns WHERE table_name = '{tableName}' AND column_name = '{columnName}' AND character_maximum_length = {length}) THEN \n",
+                   "",
+                   "END IF;\n");
+            }
+            // 处理 IF NOT EXISTS (SELECT * FROM AuthButtons WHERE AuthButtonId='SetHotelLevel' AND AuthButtonValue='524288' AND Seqid='101') 
+            if(IfConditionUtils.TryParseNotExistsSelectFromAuthButtonsCondition(ifConditionSql,out var buttonId,out var buttonValue,out var seqid))
+            {
+                return ($"IF NOT EXISTS ( SELECT 1 FROM AuthButtons WHERE AuthButtonId = '{buttonId}' AND AuthButtonValue = '{buttonValue}' AND Seqid = '{seqid}') THEN \n",
+                   "",
+                   "END IF;\n");
+            }
+            /* 处理 if exists(select distinct * from (  
+            select hotelCode as hid from dbo.posSmMappingHid
+            union all
+                                    select groupid from dbo.posSmMappingHid)a
+                                    where ISNULL(a.hid, '') != '' and hid not in(select hid from dbo.hotelProducts where productCode = 'ipos'))  
+            */
+            if (IfConditionUtils.IsExistsPosSMMappingHidInHotelProductsWithSubqueryFormat(ifConditionSql))
+            {
+                return (@"IF EXISTS (
+  SELECT 1 FROM (
+    SELECT hotelCode AS hid FROM posSmMappingHid
+    UNION ALL
+    SELECT groupid AS hid FROM posSmMappingHid
+  ) a
+  WHERE COALESCE(a.hid, '') <> '' 
+    AND a.hid NOT IN (
+      SELECT hid FROM hotelProducts WHERE productCode = 'ipos'
+    )
+) THEN
+",
+                    "",
+                    "END IF;\n");
+            }
+
+            return ("", $"{ifConditionSql} \n","");
         }
         #endregion
 
