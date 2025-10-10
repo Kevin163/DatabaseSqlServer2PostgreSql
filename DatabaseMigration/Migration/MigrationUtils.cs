@@ -160,6 +160,12 @@ namespace DatabaseMigration.Migration
                 // 处理块注释的开始
                 if (IsStartWithBlockComment(line))
                 {
+                    //如果当前语句是块注释的开始，并且之前已经有firstSql了，则认为之前的语句已经完整，当前块注释算是其他语句，所以将i-1后直接退出循环
+                    if (firstSql.Length > 0)
+                    {
+                        i--;
+                        break;
+                    }
                     isInBlockComment = true;
                     firstSql.AppendLine(line);
                     // 如果当前行同时包含块注释的开始和结束标记，则将该行加入 firstSql, 并且认为当前完整语句已经结束，跳出循环
@@ -217,12 +223,49 @@ namespace DatabaseMigration.Migration
                     continue;
                 }
                 #endregion
-                //如果当前没有在特殊状态下，并且当前行是一个新语句的开始，则认为之前的语句是已经完整的了，将当前行认为是其他语句，所以将i-1后直接退出循环
-                if (firstSql.Length > 0 && IsNewSqlSentenceStart(line))
+                #region 处理单行注释语句
+                /*
+                 单行注释有以下情况：
+                1. 以 -- 开头的行注释
+                2. 本行注释是后续新行的注释说明，则说明本行之前的语句已经是完事的语句了，可以直接返回，如：
+                  delete AuthButtons  
+  --DELETE AuthButtons   
+  
+  insert into authlist(ParentCode,AuthCode,AuthName,Seqid,mask) values('0','1','捷信达捷云系统运营管理',1,'1001000000') 
+                3. 本行注释是上一行和后面行的一部分，则需要包含在一起，并且继续读取后面的行，如：
+                CREATE TABLE dbo.HotelRegion  
+(  
+HotelID VARCHAR(6) PRIMARY KEY NOT NULL,  
+GroupID VARCHAR(6) NOT NULL,  
+Name VARCHAR(100) NOT NULL,  
+City VARCHAR(100),  
+Content VARCHAR(100),  
+Mobile VARCHAR(100) NOT NULL,  
+[Address] VARCHAR(400),  
+--DefalutLoginName VARCHAR(400),  
+CreateTime DATETIME  
+)  
+
+                 */
+                if (IsStartWithLineComment(line) && firstSql.Length > 0)
                 {
-                    i--;
-                    break;
+                    //取出下一行判断是否是新行的开始，是则表示上一行是一个完整的语句
+                    //特殊情况是后面没有其他行了，则也认为上一行是一个完整的语句
+                    var nextLine = GetRecentNotEmptyAndNotCommentLine(lines, i);
+                    if (IsNewSqlSentenceStart(nextLine) || string.IsNullOrWhiteSpace(nextLine))
+                    {
+                        i--;
+                        break;
+                    }
                 }
+                #endregion
+                //如果当前没有在特殊状态下，并且当前行是一个新语句的开始，则认为之前的语句是已经完整的了，将当前行认为是其他语句，所以将i-1后直接退出循环
+                // Treat a standalone line comment (starting with --) as the start of the next segment as well
+                if (firstSql.Length > 0 && IsNewSqlSentenceStart(line))
+                 {
+                     i--;
+                     break;
+                 }
                 // 其他情况下，则表示当前行是普通行算是firstSql的一部分，然后继续处理后续行
                 firstSql.AppendLine(line);
             }
@@ -239,6 +282,24 @@ namespace DatabaseMigration.Migration
             }
 
             return (firstSql.ToString(), otherSql.ToString());
+        }
+        /// <summary>
+        /// 获取指定索引之后最近的非空且非注释行
+        /// </summary>
+        /// <param name="lines"></param>
+        /// <param name="currentIndex"></param>
+        /// <returns></returns>
+        private static string GetRecentNotEmptyAndNotCommentLine(string[] lines, int currentIndex)
+        {
+            for (int i = currentIndex; i < lines.Length; i++)
+            {
+                var line = lines[i];
+                if (string.IsNullOrWhiteSpace(line)) continue;
+                if (IsStartWithLineComment(line)) continue;
+                if (IsStartWithBlockComment(line) && !IsEndWithBlockComment(line)) continue;
+                return line;
+            }
+            return string.Empty;
         }
         /// <summary>
         /// 从指定的if语句块中提取if条件语句
@@ -393,11 +454,23 @@ namespace DatabaseMigration.Migration
         /// <returns></returns>
         public static bool IsEndWithBlockComment(string s) => s.TrimEnd().EndsWith("*/");
         /// <summary>
+        /// 是否是以单行注释开头的行（--）
+        /// </summary>
+        /// <param name="s"></param>
+        /// <returns></returns>
+        public static bool IsStartWithLineComment(string s) => s.TrimStart().StartsWith("--");
+        /// <summary>
         /// 是否包含 if 语句的开始标记（if）
         /// </summary>
         /// <param name="s"></param>
         /// <returns></returns>
         public static bool IsStartWithIf(string s) => s.TrimStart().StartsWith("if", StringComparison.InvariantCultureIgnoreCase);
+        /// <summary>
+        /// 是否包含 delete 语句的开始标记（delete）
+        /// </summary>
+        /// <param name="s"></param>
+        /// <returns></returns>
+        public static bool IsStartWithDelete(string s) => s.TrimStart().StartsWith("delete", StringComparison.InvariantCultureIgnoreCase);
         /// <summary>
         /// 是否包含begin end语句块的开始标记（begin）
         /// </summary>

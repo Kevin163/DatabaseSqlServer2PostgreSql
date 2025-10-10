@@ -22,9 +22,42 @@ namespace DatabaseMigrationTest
 
 /* 初始化菜单开始 */";
             var (first, other) = MigrationUtils.GetFirstCompleteSqlSentence(sql);
-            Assert.Equal(" DELETE FROM dbo.sysLog WHERE cDate< DATEADD(DAY,-30,GETDATE())", first.Replace("\r\n", "\n").TrimEnd());
+            Assert.Equal(" DELETE FROM dbo.sysLog WHERE cDate< DATEADD(DAY,-30,GETDATE())", first.NormalizeLineEndings().TrimEnd());
             Assert.False(string.IsNullOrWhiteSpace(other));
             Assert.Contains("/* 初始化菜单开始 */", other);
+        }
+
+        /// <summary>
+        /// 场景：单条 DELETE 语句后直接跟块注释（没有其它 SQL）。
+        /// 期望：first 为 DELETE 语句，other 为块注释文本。
+        /// </summary>
+        [Fact]
+        public void GetFirstCompleteSqlSentence_DeleteThenBlockComment_ReturnsDeleteAndComment()
+        {
+            var sql = @" DELETE FROM slowlog WHERE logTime< DATEADD(DAY,-30,GETDATE())
+
+/* 初始化菜单开始 */";
+
+            var (first, other) = MigrationUtils.GetFirstCompleteSqlSentence(sql);
+
+            var expectedFirst = " DELETE FROM slowlog WHERE logTime< DATEADD(DAY,-30,GETDATE())";
+            var expectedOtherTrimmed = "/* 初始化菜单开始 */";
+
+            Assert.Equal(expectedFirst, first.NormalizeLineEndings().TrimEnd());
+            Assert.Equal(expectedOtherTrimmed, other.NormalizeLineEndings().Trim());
+        }
+
+        /// <summary>
+        /// 场景：单条 DELETE 语句后直接跟行注释。
+        /// 期望：first 为 DELETE 语句，other 为行注释文本。
+        /// </summary>
+        [Fact]
+        public void GetFirstCompleteSqlSentence_DeleteFollowedByLineComment_ReturnsDeleteAndComment()
+        {
+            var sql = "delete AuthButtons\n--DELETE AuthButtons\n";
+            var (first, other) = MigrationUtils.GetFirstCompleteSqlSentence(sql);
+            Assert.Equal("delete AuthButtons", first.NormalizeLineEndings().TrimEnd());
+            Assert.Equal("--DELETE AuthButtons", other.NormalizeLineEndings().Trim());
         }
     }
 }

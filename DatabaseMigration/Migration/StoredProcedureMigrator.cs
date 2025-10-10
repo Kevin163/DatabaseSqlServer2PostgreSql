@@ -145,19 +145,19 @@ ORDER BY s.name, p.name;";
                 cleaned = otherSql;
             }
 
-            // 如果仍然有还需要转换的语句，生成可编译的占位存储过程，并把原始 T-SQL 作为注释输出
-            if (needConvert.Length > 0)
-            {
-                _logger.LogError($"存储过程{procName}已转换语句：{converted.ToString()};--存在未转换的语句：{needConvert.ToString()}");
-                throw new Exception($"存储过程{procName}存在未转换的语句，请查看日志。");
-            }
-
             var sb = new StringBuilder();
             sb.AppendLine(converted.ToString());
             sb.AppendLine(needConvert.ToString());
             // 结束存储过程定义
             sb.AppendLine("END;");
             sb.AppendLine("$$;");
+            // 如果仍然有还需要转换的语句，生成可编译的占位存储过程，并把原始 T-SQL 作为注释输出
+            if (needConvert.Length > 0)
+            {
+                _logger.LogError($"存储过程{procName}转换失败，转换后的语句如下：{sb.ToString()}");
+                throw new Exception($"存储过程{procName}存在未转换的语句，请查看日志。");
+            }
+
             return sb.ToString();
         }
         #endregion
@@ -184,6 +184,11 @@ ORDER BY s.name, p.name;";
             {
                 // IF 语句, 需要转换if语句本身的语法，并且转换if语句中的sql语句
                 return ConvertIfSql(sourceConn, sql);
+            }
+            if (MigrationUtils.IsStartWithDelete(sql))
+            {
+                // delete 语句
+                return DeleteSqlUtils.ConvertDeleteSql(sql);
             }
             // 其它语句，默认为不需要额外处理，直接返回原始语句，由数据库执行时进行判断
             return (sql, "");
@@ -219,10 +224,10 @@ ORDER BY s.name, p.name;";
 
             string dropSig = string.Join(", ", dropTypes);
             var sb = new StringBuilder();
-            // 生成删除与创建语句
-            sb.AppendLine(parameters.Count > 0
-             ? $"DROP PROCEDURE IF EXISTS \"{procName}\"({dropSig});"
-             : $"DROP PROCEDURE IF EXISTS \"{procName}\"();");
+            //// 生成删除与创建语句
+            //sb.AppendLine(parameters.Count > 0
+            // ? $"DROP PROCEDURE IF EXISTS \"{procName}\"({dropSig});"
+            // : $"DROP PROCEDURE IF EXISTS \"{procName}\"();");
 
             sb.AppendLine(parameters.Count > 0
                 ? $"CREATE OR REPLACE PROCEDURE \"{procName}\"({defList}) "
