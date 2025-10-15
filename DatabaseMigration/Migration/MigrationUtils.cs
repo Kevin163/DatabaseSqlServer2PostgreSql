@@ -115,7 +115,7 @@ namespace DatabaseMigration.Migration
         /// <summary>
         /// 从指定的 SQL 脚本中提取第一个完整的 SQL 语句
         /// 以便整个语句可以作为一个单元进行转换,如一个select语句，或一个if语句块
-        /// 循环处理每一行，先判断每一行是否是一些特殊情况，是则进行对应的特殊情况处理，否则直接将该行加入firstSql
+        /// 循环处理每一行，先判断每一行是否是一些特殊情况，也是则进行对应的特殊情况处理，否则直接将该行加入firstSql
         /// </summary>
         /// <param name="sql"></param>
         /// <returns></returns>
@@ -578,9 +578,19 @@ CreateTime DATETIME
             var sch = schema.Trim();
             if (sch.EndsWith(".")) sch = sch.Substring(0, sch.Length - 1);
 
-            // 匹配最外层的 sch.标识符（避免位于字符串/括号内的粗略情况：排除前一字符为 ' " \\ / ]）
-            // 例如：dbo.TableName、DBO.fn_xxx 等
-            var pattern = $@"(?<!['""\\/\]])\b{Regex.Escape(sch)}\.(?=[A-Za-z_])";
+            // 提取裸名字（去掉方括号或双引号），用于构造多种匹配形式
+            var bare = sch.Trim();
+            if (bare.StartsWith("[") && bare.EndsWith("]")) bare = bare.Substring(1, bare.Length - 2);
+            if (bare.StartsWith("\"") && bare.EndsWith("\"")) bare = bare.Substring(1, bare.Length - 2);
+
+            // 构造可匹配的 schema 变体：bare, [bare], "bare"
+            var plainEsc = Regex.Escape(bare);
+            var bracketEsc = Regex.Escape("[" + bare + "]");
+            var quoteEsc = Regex.Escape("\"" + bare + "\"");
+
+            // 匹配最外层的 sch.标识符（避免位于字符串/注释内的粗略情况：排除前一字符为 ' " \ / ])
+            // 支持 bare., [bare]. 和 "bare".
+            var pattern = $@"(?<!['""\\/\]])(?:{bracketEsc}|{quoteEsc}|\b{plainEsc}\b)\.(?=[A-Za-z_])";
             return Regex.Replace(sql, pattern, string.Empty, RegexOptions.IgnoreCase);
         }
         /// <summary>
@@ -605,7 +615,7 @@ CreateTime DATETIME
                 while (reader.Read())
                 {
                     var line = reader.GetString(0);
-                    line = line.Replace("\r\n", ""); // 先将\r\n统一去掉，方便后续处理
+                    line = line.TrimEnd('\r', '\n'); // 先将尾部的\r\n统一去掉，方便后续处理
                     // 处理sp_helptext返回的行被截断的情况（超过255字符的行会被截断）
                     if (isSplitedLine)
                     {

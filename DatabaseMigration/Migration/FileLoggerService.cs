@@ -2,6 +2,7 @@ using Serilog;
 using Serilog.Core;
 using System.IO;
 using System.Text;
+using System.Linq;
 
 namespace DatabaseMigration.Migration
 {
@@ -18,6 +19,34 @@ namespace DatabaseMigration.Migration
             string logDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "logs");
             Directory.CreateDirectory(logDir);
             _logFilePath = Path.Combine(logDir, $"migration_{DateTime.Now:yyyyMMdd_HHmmss}.log");
+
+            // 删除旧日志文件，只保留最近的3个
+            try
+            {
+                var files = Directory.GetFiles(logDir, "migration_*.log");
+                var filesToDelete = files
+                    .OrderByDescending(f => File.GetLastWriteTimeUtc(f))
+                    .Skip(3);
+
+                foreach (var f in filesToDelete)
+                {
+                    try
+                    {
+                        if (File.Exists(f))
+                        {
+                            File.Delete(f);
+                        }
+                    }
+                    catch
+                    {
+                        // 忽略单个文件删除错误
+                    }
+                }
+            }
+            catch
+            {
+                // 忽略枚举或排序等错误，保证日志系统不会中断
+            }
 
             // 使用 Async 包装 File sink，保证写入是异步的且高效
             _logger = new LoggerConfiguration()

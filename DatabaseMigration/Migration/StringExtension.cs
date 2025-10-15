@@ -44,5 +44,15 @@
             if (input == null) return null;
             return input.Replace("\r\n", "\n").Replace("\r", "\n");
         }
+        /// <summary>
+        /// 将输入字符串转换为PostgreSQL的标识符格式。
+        /// </summary>
+        /// <param name="input"></param>
+        /// <returns></returns>
+        public static string ToPostgreSqlIdentifier(this string input)
+        {
+            if (string.IsNullOrEmpty(input)) return input;
+            return input.ToLower().Trim('[',']','\'');
+        }
     }
 }

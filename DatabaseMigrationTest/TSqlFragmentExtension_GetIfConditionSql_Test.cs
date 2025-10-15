@@ -1,4 +1,6 @@
 using DatabaseMigration.Migration;
+using DatabaseMigration.ScriptGenerator;
+using Microsoft.SqlServer.TransactSql.ScriptDom;
 
 namespace DatabaseMigrationTest
 {
@@ -6,7 +8,7 @@ namespace DatabaseMigrationTest
     /// 测试 MigrationUtils 与 IfConditionUtils 相关功能的单元测试集合。
     /// 每个测试包含简短注释说明被验证的行为。
     /// </summary>
-    public class MigrationUtils_GetIfConditionSql_Test
+    public class TSqlFragmentExtension_GetIfConditionSql_Test
     {
         /// <summary>
         /// 验证当存在 IF ... BEGIN ... END 块时，
@@ -30,13 +32,18 @@ BEGIN
 
 END";
 
-            var (cond, other) = MigrationUtils.GetIfConditionSql(sql);
-            var expectedCond = "IF NOT EXISTS(SELECT * FROM syscolumns WHERE ID = OBJECT_ID('HotelPos') AND name = 'Id')";
-            Assert.Equal(expectedCond, cond);
-            Assert.False(string.IsNullOrWhiteSpace(other));
-            Assert.Contains("BEGIN", other);
-            Assert.Contains("ALTER TABLE HotelPos ADD ID UNIQUEIDENTIFIER", other);
-            Assert.Contains("END", other);
+            var parser = new TSql170Parser(true);
+            var fragment = parser.Parse(new System.IO.StringReader(sql), out var errors);   
+
+            Assert.Empty(errors);
+
+            int startIndex = 0;
+            var tokens = fragment.GetIfConditionOnly(ref startIndex);
+            var expectedCond = "IF NOT EXISTS(SELECT * FROM syscolumns WHERE ID = OBJECT_ID('HotelPos') AND name = 'Id')\r\n\r\n";
+
+            Assert.NotEmpty(tokens);
+            Assert.Equal(expectedCond, string.Concat(tokens.Select(w=>w.Text)));
+            Assert.Equal(tokens.Count, startIndex); // 索引应指向下一个语句的起始位置
         }
 
         /// <summary>
@@ -46,9 +53,16 @@ END";
         public void GetIfConditionSql_NoIf_ReturnsEmptyAndOriginal()
         {
             var sql = "SELECT 1;\nSELECT 2;";
-            var (cond, other) = MigrationUtils.GetIfConditionSql(sql);
-            Assert.Equal(string.Empty, cond);
-            Assert.Equal(sql, other);
+            var parser = new TSql170Parser(true);
+            var fragment = parser.Parse(new System.IO.StringReader(sql), out var errors);
+
+            Assert.Empty(errors);
+
+            int startIndex = 0;
+            var tokens = fragment.GetIfConditionOnly(ref startIndex);
+
+            Assert.Empty(tokens);
+            Assert.Equal(0, startIndex); // 索引应保持不变
         }
 
         /// <summary>
