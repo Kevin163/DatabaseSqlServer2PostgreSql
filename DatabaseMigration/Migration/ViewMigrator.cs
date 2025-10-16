@@ -2,12 +2,9 @@
 using Microsoft.Data.SqlClient;
 using Microsoft.SqlServer.TransactSql.ScriptDom;
 using Npgsql;
-using System.Collections.Generic;
 using System.Data;
 using System.IO;
-using System.Linq;
 using System.Text;
-using System.Text.RegularExpressions;
 
 namespace DatabaseMigration.Migration;
 
@@ -17,14 +14,6 @@ namespace DatabaseMigration.Migration;
 public class ViewMigrator
 {
     private readonly FileLoggerService _logger;
-
-    // Reuse compiled regex across methods
-    private static readonly Regex ReCreateView = new(@"^\s*(CREATE|ALTER)\s+VIEW\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
-    private static readonly Regex ReSelect = new(@"^\s*SELECT\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
-    private static readonly Regex ReUnion = new(@"^\s*UNION(\s+ALL)?\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
-    private static readonly Regex ReLineComment = new(@"^\s*--", RegexOptions.Compiled);
-    private static readonly Regex ReUnionTail = new(@"\bUNION(\s+ALL)?\s*$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
-    private static readonly Regex ReSelectHead = new(@"^\s*SELECT\s+(.*)$", RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.Compiled);
 
     public ViewMigrator(FileLoggerService logger)
     {
@@ -158,6 +147,31 @@ public class ViewMigrator
         _logger.Log("视图迁移完成.");
     }
     /// <summary>
+    /// 核心方法，将 SQL Server 视图定义转换为 PostgreSQL 语法
+    /// 使用 ScriptDom 首先尝试解析并生成规范 SQL，再做若干文本级别的替换以转换为 Postgres-friendly 语法。
+    /// 若解析失败，则回退到原有的逐行处理逻辑（兼容旧行为）。
+    /// </summary>
+    private static string ConvertViewToPostgres(string viewDefinition, string viewName)
+    {
+        if (string.IsNullOrEmpty(viewDefinition))
+            return string.Empty;
+
+        var parser = new TSql170Parser(true);
+        IList<ParseError> errors;
+        using (var rdr = new StringReader(viewDefinition))
+        {
+            var fragment = parser.Parse(rdr, out errors);
+            if (errors.Count > 0)
+            {
+                var errorMsgs = string.Join("; ", errors.Select(e => $"{Environment.NewLine}Line {e.Line}, Col {e.Column}: {e.Message}"));
+                throw new Exception($"解析视图脚本错误：{errorMsgs}");
+            }
+            var convertedSql = new PostgreSqlViewScriptGenerator().GenerateSqlScript(fragment);
+            var deleteSql = BuildConditionalDrop(viewName.ToPostgreSqlIdentifier());
+            return $"{deleteSql}{Environment.NewLine}{convertedSql}";
+        }
+    }
+    /// <summary>
     /// 依赖图：view -> 它依赖的视图集合（只保留本次迁移内的视图）
     /// </summary>
     private static Dictionary<string, HashSet<string>> GetViewDependencyGraph(SqlConnection conn, HashSet<string> knownViews)
@@ -255,30 +269,6 @@ JOIN sys.views rv ON rv.object_id = d.referenced_id
     }
 
     /// <summary>
-    /// 核心方法，将 SQL Server 视图定义转换为 PostgreSQL 语法
-    /// 使用 ScriptDom 首先尝试解析并生成规范 SQL，再做若干文本级别的替换以转换为 Postgres-friendly 语法。
-    /// 若解析失败，则回退到原有的逐行处理逻辑（兼容旧行为）。
-    /// </summary>
-    private static string ConvertViewToPostgres(string viewDefinition, string viewName)
-    {
-        if (string.IsNullOrEmpty(viewDefinition))
-            return string.Empty;
-
-        var parser = new TSql170Parser(true);
-        IList<ParseError> errors;
-        using (var rdr = new StringReader(viewDefinition))
-        {
-            var fragment = parser.Parse(rdr, out errors);
-            if(errors.Count > 0)
-            {
-                var errorMsgs = string.Join("; ", errors.Select(e => $"{Environment.NewLine}Line {e.Line}, Col {e.Column}: {e.Message}"));
-                throw new Exception($"解析视图脚本错误：{errorMsgs}");
-            }
-            return new PostgreSqlViewScriptGenerator().GenerateSqlScript(fragment);
-        }
-    }
-
-    /// <summary>
     /// 迁移所需的辅助函数：uf_getMask，否则会在迁移某些视图时失败。
     /// </summary>
     private void ConvertFunction_Uf_Get_Mask(NpgsqlConnection targetConnection)
@@ -343,498 +333,9 @@ $$;";
     }
 
     /// <summary>
-    /// 将一条 SQL Server 视图的 SELECT 投影部分拆分为投影和 FROM 及其后续部分
-    /// 例如 "SELECT a, b FROM t WHERE x" -> ("a, b", "FROM t WHERE x")
-    /// </summary>
-    /// <param name="selectLine">原select语句</param>
-    /// <returns>拆分后的投影 projectionOnly：select语句内容，fromAndRest：from以及其他部分 </returns>
-    private static (string projectionOnly, string fromAndRest) SplitSelectProjectionAndFrom(string selectLine)
-    {
-        var m = ReSelectHead.Match(selectLine);
-        if (!m.Success) return (selectLine, null);
-        string projectionAndRest = m.Groups[1].Value;
-
-        int fromIdx = FindTopLevelKeywordIndex(projectionAndRest, "from");
-        if (fromIdx < 0)
-            return (MigrationUtils.ReplaceBrackets(projectionAndRest).TrimEnd(), null);
-
-        string projection = MigrationUtils.ReplaceBrackets(projectionAndRest.Substring(0, fromIdx).TrimEnd());
-        string fromAndRest = MigrationUtils.ReplaceBrackets(projectionAndRest.Substring(fromIdx).Trim());
-        return (projection, fromAndRest);
-    }
-
-    /// <summary>
-    /// 查找指定关键字在顶层的位置（不在引号或括号内）
-    /// 用于定位 FROM、WHERE、GROUP BY 等关键字
-    /// </summary>
-    /// <param name="text">包含关键字的文本</param>
-    /// <param name="keyword">待搜索的关键字</param>
-    /// <returns>如果在顶层中存在，则返回其位置，否则返回-1</returns>
-    private static int FindTopLevelKeywordIndex(string text, string keyword)
-    {
-        if (string.IsNullOrEmpty(text) || string.IsNullOrEmpty(keyword)) return -1;
-        int len = text.Length;
-        int klen = keyword.Length;
-        bool inSQ = false, inDQ = false; int depth = 0;
-        for (int i = 0; i <= len - klen; i++)
-        {
-            char c = text[i];
-            if (c == '\'' && !inDQ) { inSQ = !inSQ; continue; }
-            if (c == '"' && !inSQ) { inDQ = !inDQ; continue; }
-            if (inSQ || inDQ) continue;
-            if (c == '(') { depth++; continue; }
-            if (c == ')') { depth = Math.Max(0, depth - 1); continue; }
-            if (depth == 0)
-            {
-                if (string.Compare(text, i, keyword, 0, klen, true) == 0)
-                {
-                    bool prevOk = i == 0 || !char.IsLetterOrDigit(text[i - 1]);
-                    bool nextOk = (i + klen >= len) || !char.IsLetterOrDigit(text[i + klen]);
-                    if (prevOk && nextOk) return i;
-                }
-            }
-        }
-        return -1;
-    }
-    /// <summary>
-    /// 构建select语句，补齐别名
-    /// </summary>
-    /// <param name="selectLine">当前select语句</param>
-    /// <param name="expected">从第一行select语句提取出来的列名列表</param>
-    /// <param name="expectedStringKinds">从第一行select语句提取出来的列是否是string类型的列表</param>
-    /// <returns>转换后的select语句，含列名</returns>
-    static string BuildSelectWithAliases(string selectLine, List<string> expected, List<bool> expectedStringKinds)
-    {
-        var (projection, fromAndRest) = SplitSelectProjectionAndFrom(selectLine);
-        if (string.IsNullOrEmpty(projection)) return selectLine;
-
-        projection = ConvertConvertToCast(projection);
-
-        var fields = SplitFields(projection);
-        for (int i = 0; i < fields.Count; i++)
-        {
-            bool forceString = expectedStringKinds != null && i < expectedStringKinds.Count && expectedStringKinds[i];
-            fields[i] = NormalizeField(fields[i], forceString);
-        }
-
-        if (expected != null && expected.Count == fields.Count)
-        {
-            for (int i = 0; i < fields.Count; i++)
-            {
-                var (expr, alias, tail) = SplitExprAndAliasSafe(fields[i]);
-                var target = expected[i];
-                if (!string.IsNullOrEmpty(target))
-                {
-                    if (alias == null || !alias.Equals(target, StringComparison.OrdinalIgnoreCase))
-                        fields[i] = $"{expr.Trim()} AS {target}{tail}";
-                    else
-                        fields[i] = $"{expr}{(alias != null ? $" AS {alias}" : "")}{tail}";
-                }
-            }
-        }
-
-        var result = new StringBuilder();
-        result.Append("SELECT ")
-              .Append(string.Join(", ", fields));
-
-        // 如果原来行尾有union all，则保留
-        if (ReUnionTail.IsMatch(selectLine))
-        {
-            result.Append(" union all ");
-        }
-
-        // 若存在从句，把它附回
-        if (!string.IsNullOrEmpty(fromAndRest))
-        {
-            result.Append(' ').Append(fromAndRest);
-        }
-
-        return result.ToString();
-    }
-    /// <summary>
-    /// 将select语句体拆分为字段列表，按,逗号分隔
-    /// </summary>
-    /// <param name="projection"></param>
-    /// <returns></returns>
-    static List<string> SplitFields(string projection)
-    {
-        var list = new List<string>();
-        int start = 0, depth = 0;
-        bool inSQ = false, inDQ = false;
-        for (int i = 0; i < projection.Length; i++)
-        {
-            char c = projection[i];
-            if (c == '\'' && !inDQ) inSQ = !inSQ;
-            else if (c == '"' && !inSQ) inDQ = !inDQ;
-            else if (!inSQ && !inDQ)
-            {
-                if (c == '(') depth++;
-                else if (c == ')') depth = Math.Max(0, depth - 1);
-                else if (c == ',' && depth == 0)
-                {
-                    list.Add(projection.Substring(start, i - start));
-                    start = i + 1;
-                }
-            }
-        }
-        list.Add(projection.Substring(start));
-        return list;
-    }
-    /// <summary>
-    /// 从指定的字段表达式中，取出其中的值，别名，和尾部注释
-    /// 例如 "a + b AS col -- comment" -> ("a + b", "col", "-- comment")
-    /// </summary>
-    /// <param name="field"></param>
-    /// <returns></returns>
-    static (string expr, string alias, string commentTail) SplitExprAndAliasSafe(string field)
-    {
-        string s = field;
-        int commentIdx = -1;
-        bool inSQ = false, inDQ = false;
-        int depth = 0;
-        for (int i = 0; i < s.Length - 1; i++)
-        {
-            char c = s[i];
-            if (c == '\'' && !inDQ) { inSQ = !inSQ; continue; }
-            if (c == '"' && !inSQ) { inDQ = !inDQ; continue; }
-            if (!inSQ && !inDQ)
-            {
-                if (c == '(') depth++;
-                else if (c == ')') depth = Math.Max(0, depth - 1);
-                else if (depth == 0 && c == '-' && s[i + 1] == '-')
-                {
-                    commentIdx = i;
-                    break;
-                }
-            }
-        }
-        string commentTail = commentIdx >= 0 ? s.Substring(commentIdx) : "";
-        string head = commentIdx >= 0 ? s.Substring(0, commentIdx) : s;
-
-        int lastAs = -1;
-        depth = 0; inSQ = false; inDQ = false;
-        for (int i = 0; i < head.Length; i++)
-        {
-            char c = head[i];
-            if (c == '\'' && !inDQ) { inSQ = !inSQ; continue; }
-            if (c == '"' && !inSQ) { inDQ = !inDQ; continue; }
-            if (inSQ || inDQ) continue;
-
-            if (c == '(') { depth++; continue; }
-            if (c == ')') { depth = Math.Max(0, depth - 1); continue; }
-
-            if (depth == 0)
-            {
-                if ((i + 1 < head.Length) &&
-                    (head[i] == 'A' || head[i] == 'a') &&
-                    (head[i + 1] == 'S' || head[i + 1] == 's'))
-                {
-                    bool prevOk = i == 0 || !char.IsLetterOrDigit(head[i - 1]);
-                    bool nextOk = (i + 2 >= head.Length) || !char.IsLetterOrDigit(head[i + 2]);
-                    if (prevOk && nextOk)
-                        lastAs = i;
-                }
-            }
-        }
-
-        if (lastAs < 0)
-        {
-            depth = 0; inSQ = false; inDQ = false;
-            int eqIdx = -1;
-            for (int i = 0; i < head.Length; i++)
-            {
-                char c = head[i];
-                if (c == '\'' && !inDQ) { inSQ = !inSQ; continue; }
-                if (c == '"' && !inSQ) { inDQ = !inDQ; continue; }
-                if (inSQ || inDQ) continue;
-
-                if (c == '(') { depth++; continue; }
-                if (c == ')') { depth = Math.Max(0, depth - 1); continue; }
-                if (depth == 0 && c == '=') { eqIdx = i; break; }
-            }
-            if (eqIdx > 0)
-            {
-                var left = head.Substring(0, eqIdx).Trim();
-                var right = head.Substring(eqIdx + 1).Trim();
-                if (Regex.IsMatch(left, @"^[A-Za-z_][A-Za-z0-9_]*$"))
-                {
-                    return (right, left, commentTail);
-                }
-            }
-
-            // 额外处理：SQL Server 支持以空格分隔的别名（无 AS）
-            int end = head.Length - 1;
-            while (end >= 0 && char.IsWhiteSpace(head[end])) end--;
-            if (end >= 0)
-            {
-                int aliasStart = -1; string aliasTok = null; bool isBracket = false; bool isQuoted = false;
-                if (head[end] == ']')
-                {
-                    int j = end - 1; while (j >= 0 && head[j] != '[') j--; if (j >= 0) { aliasStart = j; aliasTok = head.Substring(j + 1, end - j - 1); isBracket = true; }
-                }
-                else if (head[end] == '"')
-                {
-                    int j = end - 1; while (j >= 0 && head[j] != '"') j--; if (j >= 0) { aliasStart = j; aliasTok = head.Substring(j + 1, end - j - 1); isQuoted = true; }
-                }
-                else
-                {
-                    int j = end; while (j >= 0 && (char.IsLetterOrDigit(head[j]) || head[j] == '_')) j--; int start = j + 1; if (start <= end) { aliasStart = start; aliasTok = head.Substring(start, end - start + 1); }
-                }
-
-                if (!string.IsNullOrWhiteSpace(aliasTok) && aliasStart > 0)
-                {
-                    int k = aliasStart - 1;
-                    if (k >= 0 && char.IsWhiteSpace(head[k]))
-                    {
-                        while (k >= 0 && char.IsWhiteSpace(head[k])) k--;
-                        bool ok = (k < 0 || head[k] != '.');
-                        string exprPart = head.Substring(0, aliasStart).TrimEnd();
-                        if (ok && exprPart.Trim().Length > 0)
-                        {
-                            bool acceptAlias = isBracket || isQuoted ? aliasTok.Length > 0 : Regex.IsMatch(aliasTok, @"^[A-Za-z_][A-Za-z0-9_]*$");
-                            if (acceptAlias)
-                                return (exprPart, aliasTok, commentTail);
-                        }
-                    }
-                }
-            }
-
-            return (head.Trim(), null, commentTail);
-        }
-
-        string expr = head.Substring(0, lastAs).TrimEnd();
-        string aliasPart = head.Substring(lastAs + 2).Trim();
-        string alias;
-        if (aliasPart.StartsWith("\""))
-        {
-            int end = aliasPart.IndexOf('"', 1);
-            alias = end > 0 ? aliasPart.Substring(1, end - 1) : aliasPart.Trim('"');
-        }
-        else if (aliasPart.StartsWith("'"))
-        {
-            int end = aliasPart.IndexOf('\'', 1);
-            alias = end > 0 ? aliasPart.Substring(1, end - 1) : aliasPart.Trim('\'');
-        }
-        else if (aliasPart.StartsWith("["))
-        {
-            int end = aliasPart.IndexOf(']', 1);
-            alias = end > 0 ? aliasPart.Substring(1, end - 1) : aliasPart.Trim('[', ']');
-        }
-        else
-        {
-            int end = 0; while (end < aliasPart.Length && (char.IsLetterOrDigit(aliasPart[end]) || aliasPart[end] == '_' || aliasPart[end] == '.')) end++; alias = aliasPart.Substring(0, end);
-        }
-
-        // 规范化：空字符串视为 null，便于上层判断是否需要补齐别名
-        if (string.IsNullOrWhiteSpace(alias)) alias = null;
-        return (expr, alias, commentTail);
-    }
-    /// <summary>
-    /// 处理sql server中的convert函数，转换为postgresql的cast语法
-    /// </summary>
-    /// <param name="s"></param>
-    /// <returns></returns>
-    static string ConvertConvertToCast(string s)
-    {
-        if (string.IsNullOrEmpty(s)) return s;
-
-        var sb = new StringBuilder();
-        int i = 0;
-        while (i < s.Length)
-        {
-            int idx = IndexOfWordIgnoreCase(s, "convert", i);
-            if (idx < 0)
-            {
-                sb.Append(s, i, s.Length - i);
-                break;
-            }
-
-            sb.Append(s, i, idx - i);
-            int j = idx + "convert".Length;
-
-            while (j < s.Length && char.IsWhiteSpace(s[j])) j++;
-            if (j >= s.Length || s[j] != '(')
-            {
-                sb.Append(s[idx]);
-                i = idx + 1;
-                continue;
-            }
-
-            int startParen = j;
-            j++;
-            int depth = 1;
-            bool inSQ = false, inDQ = false;
-
-            SkipSpaces();
-            int typeStart = j;
-            while (j < s.Length && (char.IsLetterOrDigit(s[j]) || s[j] == '_'))
-                j++;
-            string typeName = s.Substring(typeStart, j - typeStart);
-
-            SkipSpaces();
-            string typeLen = null;
-            if (j < s.Length && s[j] == '(')
-            {
-                j++;
-                int lenStart = j;
-                while (j < s.Length && char.IsDigit(s[j])) j++;
-                typeLen = s.Substring(lenStart, j - lenStart);
-                SkipSpaces();
-                if (j < s.Length && s[j] == ')') j++;
-            }
-
-            SkipSpaces();
-            if (j >= s.Length || s[j] != ',')
-            {
-                sb.Append(s, idx, (startParen - idx) + 1);
-                i = startParen + 1;
-                continue;
-            }
-            j++;
-
-            SkipSpaces();
-            int exprStart = j;
-            for (; j < s.Length; j++)
-            {
-                char c = s[j];
-                if (c == '\'' && !inDQ) { inSQ = !inSQ; continue; }
-                if (c == '"' && !inSQ) { inDQ = !inDQ; continue; }
-                if (inSQ || inDQ) continue;
-
-                if (c == '(') depth++;
-                else if (c == ')')
-                {
-                    depth--;
-                    if (depth == 0)
-                    {
-                        string expr = s.Substring(exprStart, j - exprStart).Trim();
-                        sb.Append("CAST(");
-                        sb.Append(expr);
-                        sb.Append(" AS ");
-                        sb.Append(typeName);
-                        if (!string.IsNullOrEmpty(typeLen))
-                        {
-                            sb.Append('(');
-                            sb.Append(typeLen);
-                            sb.Append(')');
-                        }
-                        sb.Append(')');
-
-                        i = j + 1;
-                        break;
-                    }
-                }
-            }
-
-            if (j >= s.Length)
-            {
-                sb.Append(s, idx, s.Length - idx);
-                i = s.Length;
-            }
-
-            void SkipSpaces()
-            {
-                while (j < s.Length && char.IsWhiteSpace(s[j])) j++;
-            }
-        }
-
-        return sb.ToString();
-
-        static int IndexOfWordIgnoreCase(string text, string word, int start)
-        {
-            for (int k = start; k <= text.Length - word.Length; k++)
-            {
-                if (char.ToLowerInvariant(text[k]) == char.ToLowerInvariant(word[0]) &&
-                    string.Compare(text, k, word, 0, word.Length, true) == 0)
-                {
-                    return k;
-                }
-            }
-            return -1;
-        }
-    }
-    /// <summary>
-    /// 判断表达式是否为字符串类型（字面量或 CAST(... AS {char types}）
-    /// </summary>
-    /// <param name="expr"></param>
-    /// <returns></returns>
-    static bool IsStringExpression(string expr)
-    {
-        if (string.IsNullOrWhiteSpace(expr)) return false;
-        string e = expr.Trim();
-        // 去掉包裹的括号
-        while (e.Length >= 2 && e[0] == '(' && e[e.Length - 1] == ')') e = e.Substring(1, e.Length - 2).Trim();
-        // 字符串字面量
-        if (e.StartsWith("'")) return true;
-        // CAST(... AS {char types})
-        if (Regex.IsMatch(e, @"(?is)\bCAST\s*\([^)]*\bAS\s+(n?varchar|n?char|text|bpchar|citext|name)\b")) return true;
-        return false;
-    }
-    /// <summary>
-    /// 判断表达式是否为数值字面量
-    /// </summary>
-    /// <param name="expr"></param>
-    /// <returns></returns>
-    static bool IsNumericLiteral(string expr)
-    {
-        if (string.IsNullOrWhiteSpace(expr)) return false;
-        string e = expr.Trim();
-        while (e.Length >= 2 && e[0] == '(' && e[e.Length - 1] == ')') e = e.Substring(1, e.Length - 2).Trim();
-        return Regex.IsMatch(e, @"^[+-]?\d+(\.\d+)?([eE][+-]?\d+)?$");
-    }
-    /// <summary>
-    /// 将字段表达式规范化为 PostgreSQL 语法，并根据需要强制转换为字符串类型
-    /// </summary>
-    /// <param name="field"></param>
-    /// <param name="forceString"></param>
-    /// <returns></returns>
-    static string NormalizeField(string field, bool forceString = false)
-    {
-        string f = MigrationUtils.ReplaceBrackets(field);
-        f = ConvertConvertToCast(f);
-        var (expr, alias, tail) = SplitExprAndAliasSafe(f);
-
-        if (forceString)
-        {
-            var trimmed = expr?.Trim();
-            if (!string.IsNullOrEmpty(trimmed))
-            {
-                if (!IsStringExpression(trimmed) && !Regex.IsMatch(trimmed, @"(?is)^NULL\b") && IsNumericLiteral(trimmed))
-                {
-                    expr = $"'{trimmed}'";
-                }
-            }
-        }
-
-        if (alias == null)
-        {
-            int eqTop = -1; int depth = 0; bool inSQ = false, inDQ = false;
-            for (int i = 0; i < expr.Length; i++)
-            {
-                char c = expr[i];
-                if (c == '\'' && !inDQ) { inSQ = !inSQ; continue; }
-                if (c == '"' && !inSQ) { inDQ = !inDQ; continue; }
-                if (inSQ || inDQ) continue;
-                if (c == '(') { depth++; continue; }
-                if (c == ')') { depth = Math.Max(0, depth - 1); continue; }
-                if (depth == 0 && c == '=') { eqTop = i; break; }
-            }
-            if (eqTop > 0)
-            {
-                var left = expr.Substring(0, eqTop).Trim();
-                var right = expr.Substring(eqTop + 1).Trim();
-                if (Regex.IsMatch(left, @"^[A-Za-z_][A-Za-z0-9_]*$"))
-                    return $"{right} AS {left}{tail}";
-            }
-            return f;
-        }
-        return $"{expr} AS {alias}{tail}";
-    }
-
-    /// <summary>
     /// 生成条件删除视图的 PL/pgSQL 代码（已存在则 DROP 再 CREATE）
     /// </summary>
-    static string BuildConditionalDrop(string name)
+    private static string BuildConditionalDrop(string name)
     {
         var escaped = name.Replace("'", "''");
         var sb = new StringBuilder();
