@@ -23,7 +23,7 @@ public class TSqlFragmentExtension_CreateSql_Test
         Assert.True(startIdx >= 0);
 
         int idx = startIdx;
-        var list = TSqlFragmentExtension_CreateSql.GetCompleteCreateSql(fragment, ref idx);
+        var list = tokens.GetCompleteCreateSql(ref idx);
 
         Assert.NotEmpty(list);
         Assert.Equal(TSqlTokenType.As, list.Last().TokenType);
@@ -48,7 +48,7 @@ public class TSqlFragmentExtension_CreateSql_Test
         Assert.True(startIdx >= 0);
 
         int idx = startIdx;
-        var list = TSqlFragmentExtension_CreateSql.GetCompleteCreateSql(fragment, ref idx);
+        var list = tokens.GetCompleteCreateSql(ref idx);
 
         Assert.NotEmpty(list);
         Assert.Equal(TSqlTokenType.As, list.Last().TokenType);
@@ -69,7 +69,7 @@ public class TSqlFragmentExtension_CreateSql_Test
 
         Assert.Empty(errors);
         int idx = fragment.ScriptTokenStream.Count + 3;
-        var list = TSqlFragmentExtension_CreateSql.GetCompleteCreateSql(fragment, ref idx);
+        var list = fragment.ScriptTokenStream.GetCompleteCreateSql(ref idx);
         Assert.Empty(list);
     }
 }

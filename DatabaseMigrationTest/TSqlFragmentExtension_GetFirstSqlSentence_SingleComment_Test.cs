@@ -35,6 +35,6 @@ END";
         var expected = "-- huanghb 2021年1月7日   推送微信模板消息增加保存技师号";
         Assert.Equal(expected, tokens[0].Text);
         Assert.Equal(TSqlTokenType.SingleLineComment, tokens[0].TokenType);
-        Assert.Equal(1, idx); // idx should now point to the token after the comment
+        Assert.Equal(3, idx); // idx should now point to the token after the comment
     }
 }

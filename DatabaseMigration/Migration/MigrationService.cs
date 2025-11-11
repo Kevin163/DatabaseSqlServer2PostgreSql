@@ -35,8 +35,9 @@ namespace DatabaseMigration.Migration
                             targetConnection.Open();
                             _logger.Log("目标数据库连接成功。");
 
-                            new TableMigrator(_logger, _migrationMode).Migrate(sourceConnection, targetConnection);
-                            new ViewMigrator(_logger).Migrate(sourceConnection, targetConnection);
+                            //由于表和视图的已经测试通过，目前测试期间，为了节省时间，暂时注释掉表和视图的迁移
+                            //new TableMigrator(_logger, _migrationMode).Migrate(sourceConnection, targetConnection);
+                            //new ViewMigrator(_logger).Migrate(sourceConnection, targetConnection);
                             new StoredProcedureMigrator(_logger).Migrate(sourceConnection, targetConnection);
                             // 其它迁移器同理
                         }

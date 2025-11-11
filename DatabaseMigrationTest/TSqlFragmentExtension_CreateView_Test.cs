@@ -24,7 +24,7 @@ public class TSqlFragmentExtension_CreateView_Test
         Assert.True(startIdx >= 0);
 
         int idx = startIdx;
-        var list = fragment.GetCompleteCreateViewSql(ref idx);
+        var list = tokens.GetCompleteCreateViewSql(ref idx);
 
         // should have at least the create/view/name/as tokens
         Assert.True(list.Count >= 4);
@@ -52,7 +52,7 @@ public class TSqlFragmentExtension_CreateView_Test
 
         Assert.Empty(errors);
         int idx = fragment.ScriptTokenStream.Count + 5; // out of range
-        var list = fragment.GetCompleteCreateViewSql(ref idx);
+        var list = fragment.ScriptTokenStream.GetCompleteCreateViewSql(ref idx);
         Assert.Empty(list);
     }
     [Fact]
@@ -88,12 +88,12 @@ CREATE view v_templateIdCloseStatus
 as  
 (  
  select   
- 'xWv-ZHvbvyGOqbKFHyfCCjmmJmDHyS6wm_O81lgImd4' as templateId,--Ä£°åID  
- 'Î¬ĞŞµ¥Í¨Öª' as templateName,--Ä£°åÃû³Æ  
- '0' as [status]--ÊÇ·ñÆôÓÃ£¨1£ºÆôÓÃ´Ë¹æÔò£¬0£º½ûÓÃ´Ë¹æÔò£©  
+ 'xWv-ZHvbvyGOqbKFHyfCCjmmJmDHyS6wm_O81lgImd4' as templateId,--æ¨¡æ¿ID  
+ 'ç»´ä¿®å•é€šçŸ¥' as templateName,--æ¨¡æ¿åç§°  
+ '0' as [status]--æ˜¯å¦å¯ç”¨ï¼ˆ1ï¼šå¯ç”¨æ­¤è§„åˆ™ï¼Œ0ï¼šç¦ç”¨æ­¤è§„åˆ™ï¼‰  
   
- UNION SELECT  'wV6PUtNF2D3klC4x-tw-AGmbdbUXkpszVXUTgjpxFHc','ÉóÅú×´Ì¬±ä¸üÍ¨Öª','0'  
- UNION SELECT  'ul8w_ASaz5CQODS6swFhnhhcDCRD_gTmZz6H2wzNa4s','Ô¤Ô¼×´Ì¬ÌáĞÑ','0'  
+ UNION SELECT  'wV6PUtNF2D3klC4x-tw-AGmbdbUXkpszVXUTgjpxFHc','å®¡æ‰¹çŠ¶æ€å˜æ›´é€šçŸ¥','0'  
+ UNION SELECT  'ul8w_ASaz5CQODS6swFhnhhcDCRD_gTmZz6H2wzNa4s','é¢„çº¦çŠ¶æ€æé†’','0'  
 )";
 
         var parser = new TSql170Parser(true);
@@ -110,13 +110,14 @@ as
   
 (  
  select   
- 'xWv-ZHvbvyGOqbKFHyfCCjmmJmDHyS6wm_O81lgImd4' as templateid,--Ä£°åID  
- 'Î¬ĞŞµ¥Í¨Öª' as templatename,--Ä£°åÃû³Æ  
- '0' as status--ÊÇ·ñÆôÓÃ£¨1£ºÆôÓÃ´Ë¹æÔò£¬0£º½ûÓÃ´Ë¹æÔò£©  
+ 'xWv-ZHvbvyGOqbKFHyfCCjmmJmDHyS6wm_O81lgImd4' as templateid,--æ¨¡æ¿ID  
+ 'ç»´ä¿®å•é€šçŸ¥' as templatename,--æ¨¡æ¿åç§°  
+ '0' as status--æ˜¯å¦å¯ç”¨ï¼ˆ1ï¼šå¯ç”¨æ­¤è§„åˆ™ï¼Œ0ï¼šç¦ç”¨æ­¤è§„åˆ™ï¼‰  
   
- UNION SELECT  'wV6PUtNF2D3klC4x-tw-AGmbdbUXkpszVXUTgjpxFHc' AS templateid,'ÉóÅú×´Ì¬±ä¸üÍ¨Öª' AS templatename,'0'   AS status
- UNION SELECT  'ul8w_ASaz5CQODS6swFhnhhcDCRD_gTmZz6H2wzNa4s' AS templateid,'Ô¤Ô¼×´Ì¬ÌáĞÑ' AS templatename,'0'   AS status
-)";
+ UNION SELECT  'wV6PUtNF2D3klC4x-tw-AGmbdbUXkpszVXUTgjpxFHc' AS templateid,'å®¡æ‰¹çŠ¶æ€å˜æ›´é€šçŸ¥' AS templatename,'0'   AS status
+ UNION SELECT  'ul8w_ASaz5CQODS6swFhnhhcDCRD_gTmZz6H2wzNa4s' AS templateid,'é¢„çº¦çŠ¶æ€æé†’' AS templatename,'0' AS status
+)
+";
         Assert.Equal(expected, result);
     }
 }

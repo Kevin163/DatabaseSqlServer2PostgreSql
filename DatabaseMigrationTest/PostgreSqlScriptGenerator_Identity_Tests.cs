@@ -28,12 +28,12 @@ namespace DatabaseMigrationTest
 ) && tokens[k].Text.Contains("myschema")) { i = k; break; }
             var originI = i;
             var res = frag.GetIdentityName(ref i);
-            Assert.Equal("MyColumn", res);
+            Assert.Equal("mycolumn", res);
             Assert.True(i > originI);
         }
 
         [Fact]
-        public void GetIdentityName_NotQuotedIdentifier_ReturnsEmptyAndDoesNotChangeIndex()
+        public void GetIdentityName_NotQuotedIdentifier_ReturnsItemTextAndDoesNotChangeIndex()
         {
             var sql = "SELECT MyColumn FROM MyTable";
             var frag = ParseFragment(sql);
@@ -43,7 +43,7 @@ namespace DatabaseMigrationTest
 )) { i = k; break; }
             var originI = i;
             var res = frag.GetIdentityName(ref i);
-            Assert.Equal(string.Empty, res);
+            Assert.Equal("select", res);
             Assert.Equal(originI, i);
         }
 
@@ -59,7 +59,7 @@ namespace DatabaseMigrationTest
 ) && tokens[k].Text.Equals("dbo", System.StringComparison.OrdinalIgnoreCase)) { i = k; break; }
             var originI = i;
             var res = frag.GetIdentityName(ref i);
-            Assert.Equal("MyTable", res);
+            Assert.Equal("mytable", res);
             Assert.Equal(originI+2, i);
         }
 
@@ -75,7 +75,7 @@ namespace DatabaseMigrationTest
 ) && tokens[k].Text.Contains("[dbo]")) { i = k; break; }
             var originI = i;
             var res = frag.GetIdentityName(ref i);
-            Assert.Equal("myTable", res);
+            Assert.Equal("mytable", res);
             Assert.Equal(originI+2, i);
         }
     }

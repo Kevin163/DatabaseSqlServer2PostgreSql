@@ -30,8 +30,8 @@ public class TSqlFragmentExtension_GetFirstSqlSentence_BlockComment_Test
         var tokens = fragment.GetFirstCompleteSqlTokens(ref idx);
 
         Assert.NotEmpty(tokens);
-        Assert.Equal("/* comment */", string.Concat(tokens.Select(t => t.Text)));
-        Assert.Equal(1,idx); // idx should now point to the token after the comment block
+        Assert.Equal("/* comment */\n", string.Concat(tokens.Select(t => t.Text)));
+        Assert.Equal(2,idx); // idx should now point to the token after the comment block
     }
     /// <summary>
     /// 场景：多行块注释，后面是其他内容
@@ -74,9 +74,9 @@ SELECT 1;";
         var combined = string.Concat(tokens.Select(t => t.Text));
 
         Assert.NotEmpty(tokens);
-        Assert.Equal(2,tokens.Count);
+        Assert.Equal(6,tokens.Count);
         Assert.Equal(TSqlTokenType.WhiteSpace, tokens[0].TokenType);
         Assert.Equal(TSqlTokenType.MultilineComment, tokens[1].TokenType);
-        Assert.Equal(2,idx); // idx should now point to the token after the comment block
+        Assert.Equal(6,idx); // idx should now point to the token after the comment block
     }
 }

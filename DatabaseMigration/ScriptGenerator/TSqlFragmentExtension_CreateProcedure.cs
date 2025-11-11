@@ -4,15 +4,15 @@ namespace DatabaseMigration.ScriptGenerator;
 /// <summary>
 /// TSqlFragment的扩展方法，专门用于处理Create View语句
 /// </summary>
-public static class TSqlFragmentExtension_CreateView
+public static class TSqlFragmentExtension_CreateProcedure
 {
     /// <summary>
-    /// 获取完整的Create View语句的所有Token，到as结束，如 create view xx as
+    /// 获取完整的Create Procedure语句的所有Token，到as结束，如 create procedure xx as
     /// </summary>
     /// <param name="fragment"></param>
     /// <param name="index"></param>
     /// <returns></returns>
-    public static List<TSqlParserToken> GetCompleteCreateViewSql(this IList<TSqlParserToken> tokens, ref int index)
+    public static List<TSqlParserToken> GetCompleteCreateProcedureSql(this IList<TSqlParserToken> tokens, ref int index)
     {
         var result = new List<TSqlParserToken>();
         if (tokens == null || index < 0 || index >= tokens.Count)

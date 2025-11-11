@@ -2,501 +2,761 @@ using DatabaseMigration.Migration;
 using DatabaseMigration.ScriptGenerator;
 using Microsoft.SqlServer.TransactSql.ScriptDom;
 
-namespace DatabaseMigrationTest
+namespace DatabaseMigrationTest;
+
+
+/// <summary>
+/// 测试 MigrationUtils 与 IfConditionUtils相关功能的单元测试集合。
+/// 每个测试包含简短注释说明被验证的行为。
+/// </summary>
+public class TSqlFragmentExtension_GetIfConditionSql_Test
 {
     /// <summary>
-    /// 测试 MigrationUtils 与 IfConditionUtils 相关功能的单元测试集合。
-    /// 每个测试包含简短注释说明被验证的行为。
+    /// 验证当存在 IF ... BEGIN ... END 块时，
+    /// GetIfConditionOnly 能正确分离出 IF 条件行（cond）和随后的其他内容（other）
     /// </summary>
-    public class TSqlFragmentExtension_GetIfConditionSql_Test
+    [Fact]
+    public void GetIfConditionSql_BasicIfBeginEnd_ReturnsConditionAndOther()
     {
-        /// <summary>
-        /// 验证当存在 IF ... BEGIN ... END 块时，
-        /// MigrationUtils.GetIfConditionSql 能正确分离出 IF 条件行（cond）和随后的其他内容（other）。
-        /// 断言：
-        ///  - cond 为预期的 IF 条件
-        ///  - other 不为空且包含 BEGIN、ALTER TABLE、END 等关键内容
-        /// </summary>
-        [Fact]
-        public void GetIfConditionSql_BasicIfBeginEnd_ReturnsConditionAndOther()
-        {
-            var sql = @"IF NOT EXISTS(SELECT * FROM syscolumns WHERE ID = OBJECT_ID('HotelPos') AND name = 'Id')
+        var sql = @"IF NOT EXISTS(SELECT * FROM syscolumns WHERE ID = OBJECT_ID('HotelPos') AND name = 'Id')
 
 BEGIN
 
-    ALTER TABLE HotelPos ADD ID UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID()
+ ALTER TABLE HotelPos ADD ID UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID()
 
-    ALTER TABLE HotelPos DROP CONSTRAINT pk_hotelPos
+ ALTER TABLE HotelPos DROP CONSTRAINT pk_hotelPos
 
-    ALTER TABLE hotelPos ADD CONSTRAINT pk_hotelPos PRIMARY KEY(ID)
+ ALTER TABLE hotelPos ADD CONSTRAINT pk_hotelPos PRIMARY KEY(ID)
 
 END";
 
-            var parser = new TSql170Parser(true);
-            var fragment = parser.Parse(new System.IO.StringReader(sql), out var errors);   
+        var parser = new TSql170Parser(true);
+        var fragment = parser.Parse(new System.IO.StringReader(sql), out var errors);
 
-            Assert.Empty(errors);
+        Assert.Empty(errors);
 
-            int startIndex = 0;
-            var tokens = fragment.GetIfConditionOnly(ref startIndex);
-            var expectedCond = "IF NOT EXISTS(SELECT * FROM syscolumns WHERE ID = OBJECT_ID('HotelPos') AND name = 'Id')\r\n\r\n";
+        int startIndex = 0;
+        var tokens = fragment.ScriptTokenStream.GetIfConditionOnly(ref startIndex);
+        var expectedCond = "IF NOT EXISTS(SELECT * FROM syscolumns WHERE ID = OBJECT_ID('HotelPos') AND name = 'Id')\r\n\r\n";
 
-            Assert.NotEmpty(tokens);
-            Assert.Equal(expectedCond, string.Concat(tokens.Select(w=>w.Text)));
-            Assert.Equal(tokens.Count, startIndex); // 索引应指向下一个语句的起始位置
-        }
+        Assert.NotEmpty(tokens);
+        Assert.Equal(expectedCond, string.Concat(tokens.Select(w => w.Text)));
+        Assert.Equal(tokens.Count, startIndex); // 索引应指向下一个语句的起始位置
+        Assert.Equal(TSqlTokenType.Begin, fragment.ScriptTokenStream[startIndex].TokenType);
+    }
 
-        /// <summary>
-        /// 验证当输入不包含 IF 时，GetIfConditionSql 返回空的 cond 且 other 为原始字符串。
-        /// </summary>
-        [Fact]
-        public void GetIfConditionSql_NoIf_ReturnsEmptyAndOriginal()
-        {
-            var sql = "SELECT 1;\nSELECT 2;";
-            var parser = new TSql170Parser(true);
-            var fragment = parser.Parse(new System.IO.StringReader(sql), out var errors);
+    /// <summary>
+    /// 验证当输入不包含 IF 时，GetIfConditionSql 返回空的 Token 列表且索引不变。
+    /// </summary>
+    [Fact]
+    public void GetIfConditionSql_NoIf_ReturnsEmptyAndOriginal()
+    {
+        var sql = "SELECT 1;\nSELECT 2;";
+        var parser = new TSql170Parser(true);
+        var fragment = parser.Parse(new System.IO.StringReader(sql), out var errors);
 
-            Assert.Empty(errors);
+        Assert.Empty(errors);
 
-            int startIndex = 0;
-            var tokens = fragment.GetIfConditionOnly(ref startIndex);
+        int startIndex = 0;
+        var tokens = fragment.ScriptTokenStream.GetIfConditionOnly(ref startIndex);
 
-            Assert.Empty(tokens);
-            Assert.Equal(0, startIndex); // 索引应保持不变
-        }
+        Assert.Empty(tokens);
+        Assert.Equal(0, startIndex); // 索引应保持不变
+    }
 
-        /// <summary>
-        /// 验证 IfConditionUtils.TryParseNotExistsSysColumnsCondition 能识别类似
-        /// IF NOT EXISTS(SELECT * FROM syscolumns ... ) 这种检查 syscolumns 的条件语句。
-        /// </summary>
-        [Fact]
-        public void GetIfConditionSql_IfWithoutBeginEnd_ReturnsConditionAndOther()
-        {
-            var sql = @"IF NOT EXISTS(SELECT * FROM syscolumns WHERE ID = OBJECT_ID('HotelPos') AND name = 'Id')";
+    /// <summary>
+    /// 验证 if not exists from syscolumns 条件能被正确识别，并提取出表名与列名
+    /// </summary>
+    [Fact]
+    public void IsIfNotExistsFromSyscolumnsWhereIdAndName_Normal()
+    {
+        var sql = @"IF NOT EXISTS(SELECT * FROM syscolumns WHERE ID = OBJECT_ID('HotelPos') AND name = 'Id')
+begin
+    select 1;
+end";
+        var parser = new TSql170Parser(true);
+        var fragment = parser.Parse(new System.IO.StringReader(sql), out var errors);
 
-            var actual = IfConditionUtils.TryParseNotExistsSysColumnsCondition(sql, out var table, out var column);
+        Assert.Empty(errors);
 
-            Assert.True(actual);
-            Assert.Equal("HotelPos", table);
-            Assert.Equal("Id", column);
-        }
+        var isMatch = fragment.ScriptTokenStream.IsIfNotExistsFromSyscolumnsWhereIdAndName(out var table, out var column);
 
-        /// <summary>
-        /// 验证 IfConditionUtils.TryParseNotExistsSysColumnsCondition 能识别 SELECT 1 FROM syscolumns 这类变体并解析出表名与列名。
-        /// </summary>
-        [Fact]
-        public void TryParseNotExistsSysColumnsCondition_Select1Form_ReturnsTableAndColumn()
-        {
-            var sql = "if(not exists(select 1 from syscolumns where id=object_id('helpFiles') and name='language')) ";
-            var ok = IfConditionUtils.TryParseNotExistsSysColumnsCondition(sql, out var table, out var column);
-            Assert.True(ok);
-            Assert.Equal("helpFiles", table);
-            Assert.Equal("language", column);
-        }
+        Assert.True(isMatch);
+        Assert.Equal("hotelpos", table);
+        Assert.Equal("id", column);
+    }
 
-        /// <summary>
-        /// 验证从 syscolumns 类型的 IF 条件中正确解析出表名和列名。
-        /// </summary>
-        [Fact]
-        public void GetSysColumnsTableNameAndColumnName_ValidInput_ReturnsTableAndColumn()
-        {
-            var ifConditionSql = "IF NOT EXISTS(SELECT * FROM syscolumns WHERE ID = OBJECT_ID('HotelPos') AND name = 'Id')";
-            var parsed = IfConditionUtils.TryParseNotExistsSysColumnsCondition(ifConditionSql, out var table, out var column);
-            Assert.True(parsed);
-            Assert.Equal("HotelPos", table);
-            Assert.Equal("Id", column);
-        }
+    /// <summary>
+    /// 验证if (not exists ...)形式的 syscolumns 条件能被正确识别，并提取出表名与列名
+    /// </summary>
+    [Fact]
+    public void IsIfNotExistsFromSyscolumnsWhereIdAndName_HasLeftParenthesis()
+    {
+        var sql = "if(not exists(select 1 from syscolumns where id=object_id('helpFiles') and name='language')) begin select 1; end";
 
-        /// <summary>
-        /// 验证 IfConditionUtils.GetSqlsInBeginAndEnd 的行为：
-        /// 1) 当 SQL 被最外层的 BEGIN/END 包裹（且之后没有其它有效代码）时，返回剥离后的内部语句；
-        /// 2) 当 SQL 无最外层 BEGIN/END 包裹时，直接返回原始 SQL。
-        /// </summary>
-        [Fact]
-        public void GetSqlsInBeginAndEnd_BeginEndWrapped_ReturnsInnerSql()
-        {
-            // 示例：被 BEGIN/END 包裹的块（包含空行与缩进）
-            var wrapped = @"
-BEGIN
+        var parser = new TSql170Parser(true);
+        var fragment = parser.Parse(new System.IO.StringReader(sql), out var errors);
 
-    -- inline comment
-    ALTER TABLE dbo.MyTable ADD NewCol VARCHAR(50) NOT NULL DEFAULT 'x'
+        Assert.Empty(errors);
+
+        var isMatch = fragment.ScriptTokenStream.IsIfNotExistsFromSyscolumnsWhereIdAndName(out var table, out var column);
+        Assert.True(isMatch);
+        Assert.Equal("helpfiles", table);
+        Assert.Equal("language", column);
+    }
+
+    /// <summary>
+    /// 验证 GetInnerSqls 的行为：
+    ///1) 当 SQL 被最外层的 BEGIN/END 包裹（且之后没有其它有效代码）时，返回剥离后的内部语句；
+    ///2) 当 SQL 无最外层 BEGIN/END 包裹时，直接返回原始 SQL。
+    /// </summary>
+    [Fact]
+    public void GetInnerSqls_BeginEndWrapped_ReturnsInnerSql()
+    {
+        // 示例：被 BEGIN/END 包裹的块（包含空行与缩进）
+        var wrapped = @"BEGIN
+
+ -- inline comment
+ ALTER TABLE dbo.MyTable ADD NewCol VARCHAR(50) NOT NULL DEFAULT 'x'
 
 END
 
 -- trailing comment";
 
-            var inner = IfConditionUtils.GetSqlsInBeginAndEnd(wrapped);
+        var parser = new TSql170Parser(true);
+        var fragment = parser.Parse(new System.IO.StringReader(wrapped), out var errors);
 
-            // 内部应包含 ALTER TABLE 的语句，并且不应包含 BEGIN/END
-            Assert.Contains("ALTER TABLE dbo.MyTable ADD NewCol", inner);
-            Assert.DoesNotContain("BEGIN", inner, System.StringComparison.OrdinalIgnoreCase);
-            Assert.DoesNotContain("END", inner, System.StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(errors);
 
-            // 未被包裹的 SQL 应直接返回原文
-            var notWrapped = "ALTER TABLE dbo.MyTable ADD NewCol VARCHAR(50)";
-            var result = IfConditionUtils.GetSqlsInBeginAndEnd(notWrapped);
-            Assert.Equal(notWrapped, result);
-        }
+        var startIndex = 0;
+        var innerTokens = fragment.ScriptTokenStream.GetInnerSqls(ref startIndex);
+        var inner = string.Concat(innerTokens.Select(t => t.Text));
 
-        /// <summary>
-        /// 验证 IfConditionUtils.GetSqlsInBeginAndEnd 在遇到嵌套的 BEGIN/END 时行为正确：
-        /// - 外层 BEGIN/END 被剥离
-        /// - 内层的嵌套 BEGIN/END 保留并作为内部内容返回
-        /// </summary>
-        [Fact]
-        public void GetSqlsInBeginAndEnd_NestedBeginEnd_ReturnsInnerWithNestedPreserved()
-        {
-            var wrappedNested = @"BEGIN
-    ALTER TABLE A ADD Col1 INT
-    BEGIN
-        EXEC dbo.SomeProc
-    END
-    ALTER TABLE A ADD Col2 INT
+        // 内部应包含 ALTER TABLE 的语句，并且不应包含 BEGIN/END
+        Assert.Contains("ALTER TABLE dbo.MyTable ADD NewCol", inner);
+        Assert.DoesNotContain("BEGIN", inner, System.StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("END", inner, System.StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(innerTokens.Count+2, startIndex); // 索引应指向End之后，所以需要在Tokens的长度基础上加上begin,end两个
+
+        // 未被包裹的 SQL 应直接返回原文
+        var notWrapped = "ALTER TABLE dbo.MyTable ADD NewCol VARCHAR(50)";
+        fragment = parser.Parse(new System.IO.StringReader(notWrapped), out errors);
+
+        Assert.Empty(errors);
+
+        startIndex = 0;
+        var notWrappedTokens = fragment.ScriptTokenStream.GetInnerSqls(ref startIndex);
+        var result = string.Concat(notWrappedTokens.Select(t => t.Text));
+        Assert.Equal(notWrapped, result);
+    }
+
+    /// <summary>
+    /// 验证 GetInnerSqls 在遇到嵌套的 BEGIN/END 时行为正确：
+    /// - 外层 BEGIN/END 被剥离
+    /// - 内层的嵌套 BEGIN/END 保留并作为内部内容返回
+    /// </summary>
+    [Fact]
+    public void GetInnerSqls_NestedBeginEnd_ReturnsInnerWithNestedPreserved()
+    {
+        var wrappedNested = @"BEGIN
+ ALTER TABLE A ADD Col1 INT
+ BEGIN
+ EXEC dbo.SomeProc
+ END
+ ALTER TABLE A ADD Col2 INT
 END";
 
-            var inner = IfConditionUtils.GetSqlsInBeginAndEnd(wrappedNested);
+        var parser = new TSql170Parser(true);
+        var fragment = parser.Parse(new System.IO.StringReader(wrappedNested), out var errors);
 
-            // 外层 BEGIN/END 应被移除
-            Assert.False(inner.TrimStart().StartsWith("BEGIN", System.StringComparison.OrdinalIgnoreCase));
-            Assert.False(inner.TrimEnd().EndsWith("END", System.StringComparison.OrdinalIgnoreCase));
+        Assert.Empty(errors);
+        var startIndex = 0;
+        var innerTokens = fragment.ScriptTokenStream.GetInnerSqls(ref startIndex);
 
-            // 嵌套的 BEGIN/END 应当保留
-            Assert.Contains("BEGIN", inner);
-            Assert.Contains("END", inner);
-            Assert.Contains("ALTER TABLE A ADD Col1", inner);
-            Assert.Contains("EXEC dbo.SomeProc", inner);
-            Assert.Contains("ALTER TABLE A ADD Col2", inner);
-        }
+        var expectedInner = @"
+ ALTER TABLE A ADD Col1 INT
+ BEGIN
+ EXEC dbo.SomeProc
+ END
+ ALTER TABLE A ADD Col2 INT
+";
+        var inner = string.Concat(innerTokens.Select(t => t.Text));
+        Assert.Equal(expectedInner, inner);
+    }
 
-        /// <summary>
-        /// 验证 TryParseIsObjectIdNullCondition 能正确识别 IF OBJECT_ID('Table') IS NULL 的情况，
-        /// 并能从带 schema 或不带 schema 的 OBJECT_ID 提取未限定表名；对非匹配语句返回 false。
-        /// </summary>
-        [Fact]
-        public void TryParseIsObjectIdNullCondition_ValidAndSchemaAndInvalidCases()
+    /// <summary>
+    /// 验证 IsIfObjectIdIsNull 能正确解析
+    /// </summary>
+    [Fact]
+    public void IsIfObjectIdIsNull_ValidAndSchemaAndInvalidCases()
+    {
+        // 简单表名
+        var s1 = "IF OBJECT_ID('HuiYiMapping') IS NULL select 1";
+
+        var parser = new TSql170Parser(true);
+        var fragment1 = parser.Parse(new System.IO.StringReader(s1), out var errors);
+
+        Assert.Empty(errors);
+
+        var isMatch1 = fragment1.ScriptTokenStream.IsIfObjectIdIsNull(out var tableName1);
+
+        Assert.True(isMatch1);
+        Assert.Equal("huiyimapping", tableName1);
+
+        // 带 schema 的表名
+        var s2 = "IF OBJECT_ID('dbo.HuiYiMapping') IS NULL select 1";
+
+        var fragment2 = parser.Parse(new System.IO.StringReader(s2), out var errors2);
+
+        Assert.Empty(errors2);
+
+        var isMatch2 = fragment2.ScriptTokenStream.IsIfObjectIdIsNull(out var tableName2);
+        Assert.True(isMatch2);
+        Assert.Equal("huiyimapping", tableName2);
+
+        // 小写且带括号的形式
+        var s4 = "if(object_id('versionParas') is null) select 1";
+
+        var fragment4 = parser.Parse(new System.IO.StringReader(s4), out var errors4);
+
+        Assert.Empty(errors4);
+
+        var isMatch4 = fragment4.ScriptTokenStream.IsIfObjectIdIsNull(out var tableName4);
+
+        Assert.True(isMatch4);
+        Assert.Equal("versionparas", tableName4);
+
+        // 带外层空格与圆括号的形式
+        var s5 = " IF ( OBJECT_ID('X') IS NULL ) select 1;";
+
+        var fragment5 = parser.Parse(new System.IO.StringReader(s5), out var errors5);
+
+        Assert.Empty(errors5);
+
+        var isMatch5 = fragment5.ScriptTokenStream.IsIfObjectIdIsNull(out var tableName5);
+
+        Assert.True(isMatch5);
+        Assert.Equal("x", tableName5);
+    }
+
+    /// <summary>
+    /// 新增单元测试：验证 IsIfNotExistsSelectFromSysParaWhereCodeEqualCondition 能正确解析简单的
+    /// IF NOT EXISTS(SELECT * FROM sysPara WHERE code = 'TryHotelIdForGroup')形式，
+    /// 并提取表名、列名和值（支持带 N 前缀、方括号、引号等常见变体）。
+    /// </summary>
+    [Fact]
+    public void IsIfNotExistsSelectFromSysParaWhereCodeEqualCondition_BasicAndVariants()
+    {
+        // 基本形式
+        var s1 = "IF NOT EXISTS(SELECT * FROM sysPara WHERE code = 'TryHotelIdForGroup') select 1";
+
+        var parser = new TSql170Parser(true);
+        var fragment1 = parser.Parse(new System.IO.StringReader(s1), out var errors1);
+
+        Assert.Empty(errors1);
+
+        var isMatch1 = fragment1.ScriptTokenStream.IsIfNotExistsSelectFromSysParaWhereCodeEqualCondition(out var code1);
+
+        Assert.True(isMatch1);
+        Assert.Equal("'TryHotelIdForGroup'", code1);
+
+        // 带 N 前缀和值用双引号
+        var s2 = "IF NOT EXISTS(SELECT * FROM [sysPara] WHERE [code] = N'ValueWithN') select 1";
+
+        var fragment2 = parser.Parse(new System.IO.StringReader(s2), out var errors2);
+
+        Assert.Empty(errors2);
+
+        var isMatch2 = fragment2.ScriptTokenStream.IsIfNotExistsSelectFromSysParaWhereCodeEqualCondition(out var code2);
+        Assert.True(isMatch2);
+        Assert.Equal("N'ValueWithN'", code2);
+
+        // 带分号和空白换行
+        var s3 = " IF NOT EXISTS( SELECT * FROM dbo.sysPara WHERE dbo.sysPara.code = \"abc\" ) select 1;";
+
+        var fragment3 = parser.Parse(new System.IO.StringReader(s3), out var errors3);
+
+        Assert.Empty(errors3);
+
+        var isMatch3 = fragment3.ScriptTokenStream.IsIfNotExistsSelectFromSysParaWhereCodeEqualCondition(out var code3);
+
+        Assert.True(isMatch3);
+        Assert.Equal("\"abc\"", code3);
+
+        // 紧挨括号的形式以及小写变体
+        var s4 = "IF(NOT EXISTS(SELECT 1 FROM sysPara WHERE code = 'ISPAWeiXinTemplateIDQuitSelect')) select 1";
+
+        var fragment4 = parser.Parse(new System.IO.StringReader(s4), out var errors4);
+
+        Assert.Empty(errors4);
+
+        var isMatch4 = fragment4.ScriptTokenStream.IsIfNotExistsSelectFromSysParaWhereCodeEqualCondition(out var code4);
+
+        Assert.True(isMatch4);
+        Assert.Equal("'ISPAWeiXinTemplateIDQuitSelect'", code4);
+
+        var s5 = "if(not exists(select 1 from sysPara where code='lowercase')) select 1";
+
+        var fragment5 = parser.Parse(new System.IO.StringReader(s5), out var errors5);
+
+        Assert.Empty(errors5);
+
+        var isMatch5 = fragment5.ScriptTokenStream.IsIfNotExistsSelectFromSysParaWhereCodeEqualCondition(out var code5);
+
+        Assert.True(isMatch5);
+        Assert.Equal("'lowercase'", code5);
+    }
+
+    /// <summary>
+    /// 新增单元测试：验证 TryParseNotExistsSelectFromSysObjectsCondition 能正确解析
+    /// IF NOT EXISTS(SELECT * FROM sysobjects WHERE name = '...')这类语句，支持 N 前缀和双引号/分号变体。
+    /// </summary>
+    [Fact]
+    public void IsIfNotExistsSelectFromSysobjectsWhereNameEqualCondition_BasicAndVariants()
+    {
+        var s1 = "IF NOT EXISTS(SELECT * FROM sysobjects WHERE name = 'ImeiMappingHid') select 1";
+        var parser = new TSql170Parser(true);
+
+        var fragment1 = parser.Parse(new System.IO.StringReader(s1), out var errors1);
+
+        Assert.Empty(errors1);
+
+        var isMatch1 = fragment1.ScriptTokenStream.IsIfNotExistsSelectFromSysobjectsWhereNameEqualCondition(out var objName1);
+
+        Assert.True(isMatch1);
+        Assert.Equal("imeimappinghid", objName1);
+
+        var s2 = "IF NOT EXISTS(SELECT * FROM sysobjects WHERE name = N'ImeiMappingHid') select 1";
+
+        var fragment2 = parser.Parse(new System.IO.StringReader(s2), out var errors2);
+
+        Assert.Empty(errors2);
+
+        var isMatch2 = fragment2.ScriptTokenStream.IsIfNotExistsSelectFromSysobjectsWhereNameEqualCondition(out var objName2);
+
+        Assert.True(isMatch2);
+        Assert.Equal("imeimappinghid", objName2);
+
+        var s3 = "IF NOT EXISTS(SELECT * FROM sysobjects WHERE name = \"SomeObject\") select 1;";
+
+        var fragment3 = parser.Parse(new System.IO.StringReader(s3), out var errors3);
+
+        Assert.Empty(errors3);
+
+        var isMatch3 = fragment3.ScriptTokenStream.IsIfNotExistsSelectFromSysobjectsWhereNameEqualCondition(out var objName3);
+
+        Assert.True(isMatch3);
+        Assert.Equal("someobject", objName3);
+
+        var s4 = " IF NOT EXISTS ( SELECT * FROM sysobjects WHERE name = 'X' ) select 1;";
+
+        var fragment4 = parser.Parse(new System.IO.StringReader(s4), out var errors4);
+
+        Assert.Empty(errors4);
+
+        var isMatch4 = fragment4.ScriptTokenStream.IsIfNotExistsSelectFromSysobjectsWhereNameEqualCondition(out var objName4);
+
+        Assert.True(isMatch4);
+        Assert.Equal("x", objName4);
+    }
+
+    /// <summary>
+    /// 新增单元测试：验证 IsIfNotExistsSysobjectsNameEqualNestedIndexSelect 能正确解析
+    /// 含有内层 IF NOT EXISTS( SELECT * from sysobjects where name =( SELECT TOP1 name FROM sys.indexes WHERE is_primary_key =1 AND object_id = Object_Id('posSmMappingHid') AND name='PK_posSm_20190808912' ) )，并提取出表名和索引名。
+    /// </summary>
+    [Fact]
+    public void IsIfNotExistsSysobjectsNameEqualNestedIndexSelect_ExtractsTableAndIndexName()
+    {
+        var s1 = "IF NOT EXISTS( SELECT * from sysobjects where name =( SELECT TOP1 name FROM sys.indexes WHERE is_primary_key =1 AND object_id = Object_Id('posSmMappingHid') AND name='PK_posSm_20190808912' ) ) select 1";
+        var parser = new TSql170Parser(true);
+        var fragment1 = parser.Parse(new System.IO.StringReader(s1), out var errors1);
+        Assert.Empty(errors1);
+
+        var ok1 = fragment1.ScriptTokenStream.IsIfNotExistsSysobjectsNameEqualNestedIndexSelect(out var table1, out var index1);
+        Assert.True(ok1);
+        Assert.Equal("possmmappinghid", table1);
+        Assert.Equal("pk_possm_20190808912", index1);
+
+        //变体：多余空格与 N 前缀（对索引名），并带分号
+        var s2 = " IF NOT EXISTS(SELECT * FROM sysobjects WHERE name = (SELECT TOP1 name FROM sys.indexes WHERE is_primary_key=1 AND object_id=OBJECT_ID('dbo.posSmMappingHid') AND name = N'PK_posSm_20190808912')) select 1;";
+        var fragment2 = parser.Parse(new System.IO.StringReader(s2), out var errors2);
+        Assert.Empty(errors2);
+
+        var ok2 = fragment2.ScriptTokenStream.IsIfNotExistsSysobjectsNameEqualNestedIndexSelect(out var table2, out var index2);
+        Assert.True(ok2);
+        Assert.Equal("possmmappinghid", table2);
+        Assert.Equal("pk_possm_20190808912", index2);
+    }
+
+    /// <summary>
+    /// 新增单元测试：验证 IsIfNotExistsSelectFromInformationSchemaColumns 能正确解析
+    /// 从 INFORMATION_SCHEMA.columns 查询列存在性的语句，并提取出表名和列名。
+    /// </summary>
+    [Fact]
+    public void IsIfNotExistsSelectFromInformationSchemaColumns_ExtractsTableAndColumn()
+    {
+        var s1 = "if not exists(select * from INFORMATION_SCHEMA.columns where table_name='posSmMappingHid' and column_name = 'memberVersion') select 1";
+        var parser = new TSql170Parser(true);
+        var fragment1 = parser.Parse(new System.IO.StringReader(s1), out var errors1);
+        Assert.Empty(errors1);
+        var isMatch1 = fragment1.ScriptTokenStream.IsIfNotExistsSelectFromInformationSchemaColumns(out var table1, out var column1);
+        Assert.True(isMatch1);
+        Assert.Equal("possmmappinghid", table1);
+        Assert.Equal("memberversion", column1);
+
+        //变体：列顺序不同、双引号和分号
+        var s2 = " IF NOT EXISTS ( SELECT * FROM information_schema.columns WHERE column_name = \"memberVersion\" AND table_name = N'posSmMappingHid' ) select 1;";
+        var fragment2 = parser.Parse(new System.IO.StringReader(s2), out var errors2);
+        Assert.Empty(errors2);
+        var isMatch2 = fragment2.ScriptTokenStream.IsIfNotExistsSelectFromInformationSchemaColumns(out var table2, out var column2);
+        Assert.True(isMatch2);
+        Assert.Equal("possmmappinghid", table2);
+        Assert.Equal("memberversion", column2);
+    }
+
+    /// <summary>
+    /// 新增单元测试：验证 TryParseExistsSysColumnsCondition 能正确解析
+    /// IF EXISTS(SELECT * FROM syscolumns WHERE id=OBJECT_ID('HotelUserWxInfo') AND name = 'NickName' AND length =28)
+    /// 并提取出表名、列名与长度。
+    /// </summary>
+    [Fact]
+    public void IsIfExistsFromSyscolumnsWhereIdNameAndLength_ExtractsTableColumnAndLength()
+    {
+        var s1 = "IF EXISTS(SELECT * FROM syscolumns WHERE id=OBJECT_ID('HotelUserWxInfo') AND name = 'NickName' AND length =28) select 1";
+        var parser = new TSql170Parser(true);
+        var fragment1 = parser.Parse(new System.IO.StringReader(s1), out var errors1);
+        Assert.Empty(errors1);
+        var ok1 = fragment1.ScriptTokenStream.IsIfExistsFromSyscolumnsWhereIdNameAndLength(out var table1, out var column1, out var length1);
+        Assert.True(ok1);
+        Assert.Equal("hoteluserwxinfo", table1);
+        Assert.Equal("nickname", column1);
+        Assert.Equal(28, length1);
+
+        //变体：带括号与多余空格，N 前缀和分号
+        var s2 = " IF ( EXISTS ( SELECT 1 FROM syscolumns WHERE id = OBJECT_ID('dbo.HotelUserWxInfo') AND name = N'NickName' AND length=28 ) ) select 1;";
+        var fragment2 = parser.Parse(new System.IO.StringReader(s2), out var errors2);
+        Assert.Empty(errors2);
+        var ok2 = fragment2.ScriptTokenStream.IsIfExistsFromSyscolumnsWhereIdNameAndLength(out var table2, out var column2, out var length2);
+        Assert.True(ok2);
+        Assert.Equal("hoteluserwxinfo", table2);
+        Assert.Equal("nickname", column2);
+        Assert.Equal(28, length2);
+    }
+
+    /// <summary>
+    /// 新增单元测试：验证 IsIfNotExistsSelectFromAuthButtons 能正确解析
+    /// IF NOT EXISTS (SELECT * FROM AuthButtons WHERE AuthButtonId='SetHotelLevel' AND AuthButtonValue='524288' AND Seqid='101')
+    /// 并提取出 buttonId、buttonValue 与 seqid。
+    /// </summary>
+    [Fact]
+    public void IsIfNotExistsSelectFromAuthButtons_ExtractsFields()
+    {
+        var s1 = "IF NOT EXISTS (SELECT * FROM AuthButtons WHERE AuthButtonId='SetHotelLevel' AND AuthButtonValue='524288' AND Seqid='101') select 1";
+        var parser = new TSql170Parser(true);
+        var fragment1 = parser.Parse(new System.IO.StringReader(s1), out var errors1);
+        Assert.Empty(errors1);
+        var ok1 = fragment1.ScriptTokenStream.IsIfNotExistsSelectFromAuthButtons(out var buttonId1, out var buttonValue1, out var seqid1);
+        Assert.True(ok1);
+        Assert.Equal("SetHotelLevel", buttonId1);
+        Assert.Equal("524288", buttonValue1);
+        Assert.Equal("101", seqid1);
+
+        //变体：顺序不同，N 前缀和双引号
+        var s2 = " IF NOT EXISTS(SELECT * FROM AuthButtons WHERE Seqid = N'101' AND AuthButtonValue = \"524288\" AND AuthButtonId = N'SetHotelLevel') select 1;";
+        var fragment2 = parser.Parse(new System.IO.StringReader(s2), out var errors2);
+        Assert.Empty(errors2);
+        var ok2 = fragment2.ScriptTokenStream.IsIfNotExistsSelectFromAuthButtons(out var buttonId2, out var buttonValue2, out var seqid2);
+        Assert.True(ok2);
+        Assert.Equal("SetHotelLevel", buttonId2);
+        Assert.Equal("524288", buttonValue2);
+        Assert.Equal("101", seqid2);
+    }
+
+    /// <summary>
+    /// 新增单元测试：验证 IsIfNotExistsSelectFromSysAllObjectsWhereObjectIdAndTypeIn 能正确解析
+    /// IF NOT EXISTS (SELECT * FROM sys.all_objects WHERE object_id = OBJECT_ID(N'dbo.commonInvoiceInfo') AND type IN ('U'))
+    /// 并提取出 dbo.commonInvoiceInfo
+    /// </summary>
+    [Fact]
+    public void IsIfNotExistsSelectFromSysAllObjectsWhereObjectIdAndTypeIn_ExtractsTableName()
+    {
+        var s1 = "IF NOT EXISTS (SELECT * FROM sys.all_objects WHERE object_id = OBJECT_ID(N'dbo.commonInvoiceInfo') AND type IN ('U')) select 1";
+        var parser = new TSql170Parser(true);
+        var fragment1 = parser.Parse(new System.IO.StringReader(s1), out var errors1);
+        Assert.Empty(errors1);
+        var ok1 = fragment1.ScriptTokenStream.IsIfNotExistsSelectFromSysAllObjectsWhereObjectIdAndTypeIn(out var table1);
+        Assert.True(ok1);
+        Assert.Equal("commoninvoiceinfo", table1);
+
+        var s2 = " IF NOT EXISTS(SELECT * FROM sys.all_objects WHERE object_id = OBJECT_ID('commonInvoiceInfo') AND type IN ('U') ) select 1;";
+        var fragment2 = parser.Parse(new System.IO.StringReader(s2), out var errors2);
+        Assert.Empty(errors2);
+        var ok2 = fragment2.ScriptTokenStream.IsIfNotExistsSelectFromSysAllObjectsWhereObjectIdAndTypeIn(out var table2);
+        Assert.True(ok2);
+        Assert.Equal("commoninvoiceinfo", table2);
+    }
+
+    /// <summary>
+    /// 验证 MigrationUtils.GetIfConditionSql 能正确分离复杂的 IF EXISTS 包含子查询/UNION 的情况：
+    /// - cond 为 IF ... )这一行
+    /// - other 为随后的 BEGIN ... END 块
+    /// </summary>
+    [Fact]
+    public void GetIfConditionSql_ComplexIfExistsWithSubquery_ReturnsConditionAndOther()
+    {
+        var sql = @"if exists(select distinct * from ( 
+ select hotelCode as hid from dbo.posSmMappingHid 
+ union all 
+ select groupid from dbo.posSmMappingHid)a 
+ where ISNULL(a.hid,'')!='' and hid not in(select hid from dbo.hotelProducts where productCode='ipos')) 
+begin 
+ insert into hotelProducts(hid,productCode) 
+ select distinct a.hid,'ipos' from ( 
+ select hotelCode as hid from dbo.posSmMappingHid 
+ union all 
+ select groupid from dbo.posSmMappingHid)a 
+ where ISNULL(a.hid,'')!='' and hid not in(select hid from dbo.hotelProducts where productCode='ipos') 
+end ";
+        var parser = new TSql170Parser(true);
+        var fragment = parser.Parse(new System.IO.StringReader(sql), out var errors);
+        Assert.Empty(errors);
+        var startIndex = 0;
+        var actualTokens = fragment.ScriptTokenStream.GetIfConditionOnly(ref startIndex);
+        var cond = string.Concat(actualTokens.Select(t => t.Text));
+
+        var expectedCond = @"if exists(select distinct * from ( 
+ select hotelCode as hid from dbo.posSmMappingHid 
+ union all 
+ select groupid from dbo.posSmMappingHid)a 
+ where ISNULL(a.hid,'')!='' and hid not in(select hid from dbo.hotelProducts where productCode='ipos')) 
+";
+
+        Assert.Equal(expectedCond, cond);
+    }
+
+    /// <summary>
+    /// 新增单元测试：验证 MigrationUtils.GetIfConditionSql 提取 CREATE TABLE 块中的 IF OBJECT_ID 条件。
+    /// 确保在 BEGIN/END 包裹的情况下，条件仍然能够正确提取。
+    /// </summary>
+    [Fact]
+    public void GetIfConditionSql_CreateTableBeginEnd_ReturnsCondition()
+    {
+        var sql = @"IF OBJECT_ID('HuiYiMapping') IS NULL 
+BEGIN 
+ CREATE TABLE HuiYiMapping( 
+ [id] [uniqueidentifier] NOT NULL primary key, 
+ [hid] [char](6), 
+ [openId] [varchar](60) 
+ ) 
+END ";
+        var parser = new TSql170Parser(true);
+        var fragment = parser.Parse(new System.IO.StringReader(sql), out var errors);
+        Assert.Empty(errors);
+        var startIndex = 0;
+        var actualTokens = fragment.ScriptTokenStream.GetIfConditionOnly(ref startIndex);
+        var cond = string.Concat(actualTokens.Select(t => t.Text));
+
+        var expectedCond = "IF OBJECT_ID('HuiYiMapping') IS NULL \r\n";
+        Assert.Equal(expectedCond, cond);
+    }
+
+    /// <summary>
+    /// 验证 IsIfExistsSelectDistinctFromUnionAllSubquery_PositiveAndNegativeCases 能正确识别
+    /// </summary>
+    [Fact]
+    public void IsIfExistsSelectDistinctFromUnionAllSubquery_PositiveAndNegativeCases()
+    {
+        var positive = @"if exists(select distinct * from (
+ select hotelCode as hid from posSmMappingHid
+ union all
+ select groupid from posSmMappingHid)a
+ where ISNULL(a.hid,'')!='' and hid not in(select hid from hotelProducts where productCode='ipos')) select 1";
+        var parser = new TSql170Parser(true);
+        var fragment1 = parser.Parse(new System.IO.StringReader(positive), out var errors1);
+        Assert.Empty(errors1);
+        var ok1 = fragment1.ScriptTokenStream.IsIfExistsSelectDistinctFromUnionAllSubquery();
+        Assert.True(ok1);
+
+        // Missing posSmMappingHid
+        var negative1 = @"if exists(select distinct * from (
+ select hotelCode as hid from otherTable
+ union all
+ select groupid from otherTable)a
+ where ISNULL(a.hid,'')!='' and hid not in(select hid from hotelProducts where productCode='ipos')) select 1";
+        var fragment2 = parser.Parse(new System.IO.StringReader(negative1), out var errors2);
+        Assert.Empty(errors2);
+        var ok2 = fragment2.ScriptTokenStream.IsIfExistsSelectDistinctFromUnionAllSubquery();
+        Assert.False(ok2);
+
+        // Missing not in clause
+        var negative2 = @"if exists(select distinct * from (
+ select hotelCode as hid from posSmMappingHid
+ union all
+ select groupid from posSmMappingHid)a
+ where ISNULL(a.hid,'')!='') select 1";
+        var fragment3 = parser.Parse(new System.IO.StringReader(negative2), out var errors3);
+        Assert.Empty(errors3);
+        var ok3 = fragment3.ScriptTokenStream.IsIfExistsSelectDistinctFromUnionAllSubquery();
+        Assert.False(ok3);
+
+        // Different productCode value
+        var negative3 = @"if exists(select distinct * from (
+ select hotelCode as hid from posSmMappingHid
+ union all
+ select groupid from posSmMappingHid)a
+ where ISNULL(a.hid,'')!='' and hid not in(select hid from hotelProducts where productCode='other')) select 1";
+        var fragment4 = parser.Parse(new System.IO.StringReader(negative3), out var errors4);
+        Assert.Empty(errors4);
+        var ok4 = fragment4.ScriptTokenStream.IsIfExistsSelectDistinctFromUnionAllSubquery();
+        Assert.False(ok4);
+    }
+
+    /// <summary>
+    /// 新增单元测试：验证 GetIfCompleteSql 能正确提取包含 BEGIN...END 块的完整 IF语句
+    /// 并且返回的索引指向下一个语句的起始位置。
+    /// </summary>
+    [Fact]
+    public void GetIfCompleteSql_IfBeginEnd_ReturnsCompleteBlockAndMovesIndex()
+    {
+        var sql = @"IF NOT EXISTS(SELECT * FROM syscolumns WHERE ID = OBJECT_ID('HotelPos') AND name = 'Id')
+
+BEGIN
+
+ ALTER TABLE HotelPos ADD ID UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID()
+
+END
+SELECT 1;";
+
+        var parser = new TSql170Parser(true);
+        var fragment = parser.Parse(new System.IO.StringReader(sql), out var errors);
+        Assert.Empty(errors);
+
+        int startIndex = 0;
+        var tokens = fragment.ScriptTokenStream.GetIfCompleteSql(ref startIndex);
+
+        Assert.NotEmpty(tokens);
+        var text = string.Concat(tokens.Select(t => t.Text));
+        Assert.Contains("BEGIN", text, System.StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("END", text, System.StringComparison.OrdinalIgnoreCase);
+        // 索引应移动到 IF 块之后，指向后续的 SELECT
+        Assert.Equal(tokens.Count, startIndex);
+        //当前位置的下一个 token 应为 SELECT
+        Assert.True(startIndex < fragment.ScriptTokenStream.Count);
+        Assert.Equal("SELECT", fragment.ScriptTokenStream[startIndex+1].Text, ignoreCase: true);
+    }
+
+    [Fact]
+    public void IsMatchTokenTypesSequence_MatchCases()
+    {
+        var sql = @"IF NOT EXISTS(SELECT * FROM syscolumns WHERE ID = OBJECT_ID('HotelPos') AND name = 'Id')
+BEGIN
+ ALTER TABLE HotelPos ADD ID UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID()
+END";
+        var parser = new TSql170Parser(true);
+        var fragment = parser.Parse(new System.IO.StringReader(sql), out var errors);
+        Assert.Empty(errors);
+
+        int startIndex = 0;
+        var tokens = fragment.ScriptTokenStream.GetIfConditionOnly(ref startIndex);
+        Assert.NotEmpty(tokens);
+
+        // Build the tokenTypes sequence similar to IsIfNotExistsFromSyscolumnsWhereIdAndName
+        var tokenTypes = new List<TSqlTokenTypeItem>
         {
-            // 简单表名
-            var s1 = "IF OBJECT_ID('HuiYiMapping') IS NULL";
-            var ok1 = IfConditionUtils.TryParseIsObjectIdNullCondition(s1, out var table1);
-            Assert.True(ok1);
-            Assert.Equal("HuiYiMapping", table1);
+            new TSqlTokenTypeItem(TSqlTokenType.If),
+            new TSqlTokenTypeItem(TSqlTokenType.Not),
+            new TSqlTokenTypeItem(TSqlTokenType.Exists),
+            new TSqlTokenTypeItem(TSqlTokenType.LeftParenthesis),
+            new TSqlTokenTypeItem(TSqlTokenType.Select),
+            new TSqlTokenTypeItem(TSqlTokenType.From),
+            new TSqlTokenTypeItem(TSqlTokenType.Identifier, value: "syscolumns"),
+            new TSqlTokenTypeItem(TSqlTokenType.Where),
+            new TSqlTokenTypeItem(TSqlTokenType.Identifier, value: "id"),
+            new TSqlTokenTypeItem(TSqlTokenType.EqualsSign),
+            new TSqlTokenTypeItem(TSqlTokenType.Identifier, value: "OBJECT_ID"),
+            new TSqlTokenTypeItem(TSqlTokenType.LeftParenthesis),
+            new TSqlTokenTypeItem(TSqlTokenType.AsciiStringLiteral, action: TSqlTokenTypeAction.OutValue),
+            new TSqlTokenTypeItem(TSqlTokenType.RightParenthesis),
+            new TSqlTokenTypeItem(TSqlTokenType.And),
+            new TSqlTokenTypeItem(TSqlTokenType.Identifier, value: "name"),
+            new TSqlTokenTypeItem(TSqlTokenType.EqualsSign),
+            new TSqlTokenTypeItem(TSqlTokenType.AsciiStringLiteral, action: TSqlTokenTypeAction.OutValue),
+            new TSqlTokenTypeItem(TSqlTokenType.RightParenthesis),
+        };
 
-            // 带 schema 的表名
-            var s2 = "IF OBJECT_ID('dbo.HuiYiMapping') IS NULL";
-            var ok2 = IfConditionUtils.TryParseIsObjectIdNullCondition(s2, out var table2);
-            Assert.True(ok2);
-            Assert.Equal("dbo.HuiYiMapping", table2);
+        var ok = tokens.IsMatchTokenTypesSequence(tokenTypes, out var outValues);
+        Assert.True(ok);
+        // Expect two out values: the table and the column string literals
+        Assert.Equal(2, outValues.Count);
+        Assert.Equal("'HotelPos'", outValues[0]);
+        Assert.Equal("'Id'", outValues[1]);
+    }
 
-            // 小写且带括号的形式
-            var s4 = "if(object_id('versionParas') is null)";
-            var ok4 = IfConditionUtils.TryParseIsObjectIdNullCondition(s4, out var table4);
-            Assert.True(ok4);
-            Assert.Equal("versionParas", table4);
+    [Fact]
+    public void IsMatchTokenTypesSequence_MismatchCases()
+    {
+        var sql = @"IF OBJECT_ID('HuiYiMapping') IS NULL 
+BEGIN 
+ CREATE TABLE HuiYiMapping( 
+ [id] [uniqueidentifier] NOT NULL primary key, 
+ [hid] [char](6), 
+ [openId] [varchar](60) 
+ ) 
+END";
+        var parser = new TSql170Parser(true);
+        var fragment = parser.Parse(new System.IO.StringReader(sql), out var errors);
+        Assert.Empty(errors);
 
-            // 带外层空格与圆括号的形式
-            var s5 = "  IF ( OBJECT_ID('X') IS NULL );";
-            var ok5 = IfConditionUtils.TryParseIsObjectIdNullCondition(s5, out var table5);
-            Assert.True(ok5);
-            Assert.Equal("X", table5);
-        }
+        int startIndex = 0;
+        var tokens = fragment.ScriptTokenStream.GetIfConditionOnly(ref startIndex);
+        Assert.NotEmpty(tokens);
 
-        /// <summary>
-        /// 新增单元测试：验证 TryParseSelectFromTableWhenWhereOneEqualCondition 能正确解析简单的
-        /// IF NOT EXISTS(SELECT * FROM sysPara WHERE code = 'TryHotelIdForGroup') 形式，
-        /// 并提取表名、列名和值（支持带 N 前缀、方括号、引号等常见变体）。
-        /// </summary>
-        [Fact]
-        public void TryParseSelectFromTableWhenWhereOneEqualCondition_BasicAndVariants()
+        // Build the tokenTypes sequence similar to IsIfNotExistsFromSyscolumnsWhereIdAndName
+        var tokenTypes = new List<TSqlTokenTypeItem>
         {
-            // 基本形式
-            var s1 = "IF NOT EXISTS(SELECT * FROM sysPara WHERE code = 'TryHotelIdForGroup')";
-            var ok1 = IfConditionUtils.TryParseSelectFromTableWhenWhereOneEqualCondition(s1, out var table1, out var where1);
-            Assert.True(ok1);
-            Assert.Equal("sysPara", table1);
-            Assert.NotNull(where1);
-            Assert.Equal("code", where1!.ColumnName);
-            Assert.Equal(WhereConditionOperator.Equal, where1.Operator);
-            Assert.Equal("TryHotelIdForGroup", where1.Value);
+            new TSqlTokenTypeItem(TSqlTokenType.If),
+            new TSqlTokenTypeItem(TSqlTokenType.Not),
+            new TSqlTokenTypeItem(TSqlTokenType.Exists),
+            new TSqlTokenTypeItem(TSqlTokenType.LeftParenthesis),
+            new TSqlTokenTypeItem(TSqlTokenType.Select),
+            new TSqlTokenTypeItem(TSqlTokenType.From),
+            new TSqlTokenTypeItem(TSqlTokenType.Identifier, value: "syscolumns"),
+            new TSqlTokenTypeItem(TSqlTokenType.Where),
+            new TSqlTokenTypeItem(TSqlTokenType.Identifier, value: "id"),
+            new TSqlTokenTypeItem(TSqlTokenType.EqualsSign),
+            new TSqlTokenTypeItem(TSqlTokenType.Identifier, value: "OBJECT_ID"),
+            new TSqlTokenTypeItem(TSqlTokenType.LeftParenthesis),
+            new TSqlTokenTypeItem(TSqlTokenType.AsciiStringLiteral, action: TSqlTokenTypeAction.OutValue),
+            new TSqlTokenTypeItem(TSqlTokenType.RightParenthesis),
+            new TSqlTokenTypeItem(TSqlTokenType.And),
+            new TSqlTokenTypeItem(TSqlTokenType.Identifier, value: "name"),
+            new TSqlTokenTypeItem(TSqlTokenType.EqualsSign),
+            new TSqlTokenTypeItem(TSqlTokenType.AsciiStringLiteral, action: TSqlTokenTypeAction.OutValue),
+            new TSqlTokenTypeItem(TSqlTokenType.RightParenthesis),
+        };
 
-            // 带 N 前缀和值用双引号
-            var s2 = "IF NOT EXISTS(SELECT * FROM [sysPara] WHERE [code] = N'ValueWithN')";
-            var ok2 = IfConditionUtils.TryParseSelectFromTableWhenWhereOneEqualCondition(s2, out var table2, out var where2);
-            Assert.True(ok2);
-            Assert.Equal("sysPara", table2);
-            Assert.NotNull(where2);
-            Assert.Equal("code", where2!.ColumnName);
-            Assert.Equal(WhereConditionOperator.Equal, where2.Operator);
-            Assert.Equal("ValueWithN", where2.Value);
+        var ok = tokens.IsMatchTokenTypesSequence(tokenTypes, out var outValues);
+        Assert.False(ok);
+    }
 
-            // 带分号和空白换行
-            var s3 = "  IF NOT EXISTS(  SELECT * FROM dbo.sysPara  WHERE  dbo.sysPara.code = \"abc\"  );";
-            var ok3 = IfConditionUtils.TryParseSelectFromTableWhenWhereOneEqualCondition(s3, out var table3, out var where3);
-            Assert.True(ok3);
-            Assert.Equal("sysPara", table3);
-            Assert.NotNull(where3);
-            Assert.Equal("dbo.sysPara.code", where3!.ColumnName);
-            Assert.Equal("abc", where3.Value);
+    [Fact]
+    public void IsIfNotExistsFromSyscolumnsWhereIdAndName_TokenExtension_ReturnsTableAndColumn()
+    {
+        var sql = @"IF NOT EXISTS(SELECT * FROM syscolumns WHERE ID = OBJECT_ID('HotelPos') AND name = 'Id')
+BEGIN
+ ALTER TABLE HotelPos ADD ID UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID()
+END";
+        var parser = new TSql170Parser(true);
+        var fragment = parser.Parse(new System.IO.StringReader(sql), out var errors);
+        Assert.Empty(errors);
 
-            // 紧挨括号的形式以及小写变体
-            var s4 = "IF(NOT EXISTS(SELECT 1 FROM sysPara WHERE code = 'ISPAWeiXinTemplateIDQuitSelect'))";
-            var ok4 = IfConditionUtils.TryParseSelectFromTableWhenWhereOneEqualCondition(s4, out var table4, out var where4);
-            Assert.True(ok4);
-            Assert.Equal("sysPara", table4);
-            Assert.NotNull(where4);
-            Assert.Equal("code", where4!.ColumnName);
-            Assert.Equal("ISPAWeiXinTemplateIDQuitSelect", where4.Value);
+        int startIndex =0;
+        var tokens = fragment.ScriptTokenStream.GetIfConditionOnly(ref startIndex);
+        Assert.NotEmpty(tokens);
 
-            var s5 = "if(not exists(select 1 from sysPara where code='lowercase'))";
-            var ok5 = IfConditionUtils.TryParseSelectFromTableWhenWhereOneEqualCondition(s5, out var table5, out var where5);
-            Assert.True(ok5);
-            Assert.Equal("sysPara", table5);
-            Assert.NotNull(where5);
-            Assert.Equal("code", where5!.ColumnName);
-            Assert.Equal("lowercase", where5.Value);
-        }
-
-        /// <summary>
-        /// 新增单元测试：验证 TryParseNotExistsSelectFromSysObjectsCondition 能正确解析
-        /// IF NOT EXISTS(SELECT * FROM sysobjects WHERE name = '...') 这类语句，支持 N 前缀和双引号/分号变体。
-        /// </summary>
-        [Fact]
-        public void TryParseNotExistsSelectFromSysObjectsCondition_BasicAndVariants()
-        {
-            var s1 = "IF NOT EXISTS(SELECT * FROM sysobjects WHERE name = 'ImeiMappingHid')";
-            var ok1 = IfConditionUtils.TryParseNotExistsSelectFromSysObjectsCondition(s1, out var obj1);
-            Assert.True(ok1);
-            Assert.Equal("ImeiMappingHid", obj1);
-
-            var s2 = "IF NOT EXISTS(SELECT * FROM sysobjects WHERE name = N'ImeiMappingHid')";
-            var ok2 = IfConditionUtils.TryParseNotExistsSelectFromSysObjectsCondition(s2, out var obj2);
-            Assert.True(ok2);
-            Assert.Equal("ImeiMappingHid", obj2);
-
-            var s3 = "IF NOT EXISTS(SELECT * FROM sysobjects WHERE name = \"SomeObject\");";
-            var ok3 = IfConditionUtils.TryParseNotExistsSelectFromSysObjectsCondition(s3, out var obj3);
-            Assert.True(ok3);
-            Assert.Equal("SomeObject", obj3);
-
-            var s4 = "  IF NOT EXISTS ( SELECT * FROM sysobjects WHERE name = 'X' );";
-            var ok4 = IfConditionUtils.TryParseNotExistsSelectFromSysObjectsCondition(s4, out var obj4);
-            Assert.True(ok4);
-            Assert.Equal("X", obj4);
-        }
-
-        /// <summary>
-        /// 新增单元测试：验证 TryParseNotExistsSelectFromSysIndexCondition 能正确解析
-        /// 含有内层 SELECT TOP 1 FROM sys.indexes 的语句，并提取出表名和索引名。
-        /// </summary>
-        [Fact]
-        public void TryParseNotExistsSelectFromSysIndexCondition_ExtractsTableAndIndexName()
-        {
-            var s1 = "IF NOT EXISTS( SELECT * from sysobjects where name =( SELECT TOP 1 name FROM sys.indexes  WHERE is_primary_key = 1   AND object_id  = Object_Id('posSmMappingHid') AND name='PK_posSm_20190808912' ) )";
-            var ok1 = IfConditionUtils.TryParseNotExistsSelectFromSysIndexCondition(s1, out var table1, out var index1);
-            Assert.True(ok1);
-            Assert.Equal("posSmMappingHid", table1);
-            Assert.Equal("PK_posSm_20190808912", index1);
-
-            // 变体：多余空格与 N 前缀（对索引名），并带分号
-            var s2 = "  IF NOT EXISTS(SELECT * FROM sysobjects WHERE name = (SELECT TOP 1 name FROM sys.indexes WHERE is_primary_key=1 AND object_id=OBJECT_ID('dbo.posSmMappingHid') AND name = N'PK_posSm_20190808912'));";
-            var ok2 = IfConditionUtils.TryParseNotExistsSelectFromSysIndexCondition(s2, out var table2, out var index2);
-            Assert.True(ok2);
-            Assert.Equal("posSmMappingHid", table2);
-            Assert.Equal("PK_posSm_20190808912", index2);
-        }
-
-        /// <summary>
-        /// 新增单元测试：验证 TryParseNotExistsInformationSchemaColumnsCondition 能正确解析
-        /// 从 INFORMATION_SCHEMA.columns 查询列存在性的语句，并提取出表名和列名。
-        /// </summary>
-        [Fact]
-        public void TryParseNotExistsInformationSchemaColumnsCondition_ExtractsTableAndColumn()
-        {
-            var s1 = "if not exists(select * from INFORMATION_SCHEMA.columns where table_name='posSmMappingHid' and column_name = 'memberVersion')";
-            var ok1 = IfConditionUtils.TryParseNotExistsInformationSchemaColumnsCondition(s1, out var table1, out var column1);
-            Assert.True(ok1);
-            Assert.Equal("posSmMappingHid", table1);
-            Assert.Equal("memberVersion", column1);
-
-            // 变体：列顺序不同、双引号和分号
-            var s2 = " IF NOT EXISTS ( SELECT * FROM information_schema.columns WHERE column_name = \"memberVersion\" AND table_name = N'posSmMappingHid' );";
-            var ok2 = IfConditionUtils.TryParseNotExistsInformationSchemaColumnsCondition(s2, out var table2, out var column2);
-            Assert.True(ok2);
-            Assert.Equal("posSmMappingHid", table2);
-            Assert.Equal("memberVersion", column2);
-        }
-
-        /// <summary>
-        /// 新增单元测试：验证 TryParseExistsSysColumnsCondition 能正确解析
-        /// IF EXISTS(SELECT * FROM syscolumns WHERE id=OBJECT_ID('HotelUserWxInfo') AND name = 'NickName' AND length = 28)
-        /// 并提取出表名、列名与长度。
-        /// </summary>
-        [Fact]
-        public void TryParseExistsSysColumnsCondition_ExtractsTableColumnAndLength()
-        {
-            var s1 = "IF EXISTS(SELECT * FROM syscolumns WHERE id=OBJECT_ID('HotelUserWxInfo') AND name = 'NickName' AND length = 28)";
-            var ok1 = IfConditionUtils.TryParseExistsSysColumnsCondition(s1, out var table1, out var col1, out var len1);
-            Assert.True(ok1);
-            Assert.Equal("HotelUserWxInfo", table1);
-            Assert.Equal("NickName", col1);
-            Assert.Equal(28, len1);
-
-            // 变体：带括号与多余空格，N 前缀和分号
-            var s2 = "  IF ( EXISTS ( SELECT 1 FROM syscolumns WHERE id = OBJECT_ID('dbo.HotelUserWxInfo') AND name = N'NickName' AND length=28 ) );";
-            var ok2 = IfConditionUtils.TryParseExistsSysColumnsCondition(s2, out var table2, out var col2, out var len2);
-            Assert.True(ok2);
-            Assert.Equal("HotelUserWxInfo", table2);
-            Assert.Equal("NickName", col2);
-            Assert.Equal(28, len2);
-        }
-
-        /// <summary>
-        /// 新增单元测试：验证 TryParseNotExistsSelectFromAuthButtonsCondition 能正确解析
-        /// IF NOT EXISTS (SELECT * FROM AuthButtons WHERE AuthButtonId='SetHotelLevel' AND AuthButtonValue='524288' AND Seqid='101')
-        /// 并提取出 buttonId、buttonValue 与 seqid。
-        /// </summary>
-        [Fact]
-        public void TryParseNotExistsSelectFromAuthButtonsCondition_ExtractsFields()
-        {
-            var s1 = "IF NOT EXISTS (SELECT * FROM AuthButtons WHERE AuthButtonId='SetHotelLevel' AND AuthButtonValue='524288' AND Seqid='101')";
-            var ok1 = IfConditionUtils.TryParseNotExistsSelectFromAuthButtonsCondition(s1, out var buttonId1, out var buttonValue1, out var seqid1);
-            Assert.True(ok1);
-            Assert.Equal("SetHotelLevel", buttonId1);
-            Assert.Equal("524288", buttonValue1);
-            Assert.Equal("101", seqid1);
-
-            // 变体：顺序不同，N 前缀和双引号
-            var s2 = " IF NOT EXISTS(SELECT * FROM AuthButtons WHERE Seqid = N'101' AND AuthButtonValue = \"524288\" AND AuthButtonId = N'SetHotelLevel');";
-            var ok2 = IfConditionUtils.TryParseNotExistsSelectFromAuthButtonsCondition(s2, out var buttonId2, out var buttonValue2, out var seqid2);
-            Assert.True(ok2);
-            Assert.Equal("SetHotelLevel", buttonId2);
-            Assert.Equal("524288", buttonValue2);
-            Assert.Equal("101", seqid2);
-        }
-
-        /// <summary>
-        /// 新增单元测试：验证 TryParseNotExistsSelectFromAllObjectsCondition 能正确解析
-        /// IF NOT EXISTS (SELECT * FROM sys.all_objects WHERE object_id = OBJECT_ID(N'dbo.commonInvoiceInfo') AND type IN ('U'))
-        /// 并提取出 dbo.commonInvoiceInfo
-        /// </summary>
-        [Fact]
-        public void TryParseNotExistsSelectFromAllObjectsCondition_ExtractsTableName()
-        {
-            var s1 = "IF NOT EXISTS (SELECT * FROM sys.all_objects WHERE object_id = OBJECT_ID(N'dbo.commonInvoiceInfo') AND type IN ('U'))";
-            var ok1 = IfConditionUtils.TryParseNotExistsSelectFromAllObjectsCondition(s1, out var table1);
-            Assert.True(ok1);
-            Assert.Equal("dbo.commonInvoiceInfo", table1);
-
-            var s2 = " IF NOT EXISTS(SELECT * FROM sys.all_objects WHERE object_id = OBJECT_ID('commonInvoiceInfo') AND type IN ('U') );";
-            var ok2 = IfConditionUtils.TryParseNotExistsSelectFromAllObjectsCondition(s2, out var table2);
-            Assert.True(ok2);
-            Assert.Equal("commonInvoiceInfo", table2);
-        }
-
-        /// <summary>
-        /// 验证 MigrationUtils.GetIfConditionSql 能正确分离复杂的 IF EXISTS 包含子查询/UNION 的情况：
-        /// - cond 为 IF ... ) 这一行
-        /// - other 为随后的 BEGIN ... END 块
-        /// </summary>
-        [Fact]
-        public void GetIfConditionSql_ComplexIfExistsWithSubquery_ReturnsConditionAndOther()
-        {
-            var sql = @"if exists(select distinct * from (  
-    select hotelCode as hid from dbo.posSmMappingHid  
-    union all  
-    select groupid from dbo.posSmMappingHid)a  
-    where ISNULL(a.hid,'')!='' and hid not in(select hid from dbo.hotelProducts where productCode='ipos'))  
-begin  
-    insert into hotelProducts(hid,productCode)  
-    select distinct a.hid,'ipos' from (  
-    select hotelCode as hid from dbo.posSmMappingHid  
-    union all  
-    select groupid from dbo.posSmMappingHid)a  
-    where ISNULL(a.hid,'')!='' and hid not in(select hid from dbo.hotelProducts where productCode='ipos')  
-end  ";
-
-            var (cond, other) = MigrationUtils.GetIfConditionSql(sql);
-
-            var expectedCond = @"if exists(select distinct * from (  
-    select hotelCode as hid from dbo.posSmMappingHid  
-    union all  
-    select groupid from dbo.posSmMappingHid)a  
-    where ISNULL(a.hid,'')!='' and hid not in(select hid from dbo.hotelProducts where productCode='ipos'))  ";
-
-            var expectedOther = @"begin  
-    insert into hotelProducts(hid,productCode)  
-    select distinct a.hid,'ipos' from (  
-    select hotelCode as hid from dbo.posSmMappingHid  
-    union all  
-    select groupid from dbo.posSmMappingHid)a  
-    where ISNULL(a.hid,'')!='' and hid not in(select hid from dbo.hotelProducts where productCode='ipos')  
-end  ";
-
-            Assert.Equal(expectedCond.NormalizeLineEndings(), cond.NormalizeLineEndings());
-            Assert.Equal(expectedOther.NormalizeLineEndings(), other.NormalizeLineEndings());
-        }
-
-        /// <summary>
-        /// 新增单元测试：验证 MigrationUtils.GetIfConditionSql 提取 CREATE TABLE 块中的 IF OBJECT_ID 条件。
-        /// 确保在 BEGIN/END 包裹的情况下，条件仍然能够正确提取。
-        /// </summary>
-        [Fact]
-        public void GetIfConditionSql_CreateTableBeginEnd_ReturnsCondition()
-        {
-            var sql = @"IF OBJECT_ID('HuiYiMapping') IS NULL  
-BEGIN  
- CREATE TABLE HuiYiMapping(  
-  [id] [uniqueidentifier] NOT NULL primary key,  
-  [hid] [char](6),    
-  [openId] [varchar](60)  
- )  
-END  ";
-
-            var (cond, other) = MigrationUtils.GetIfConditionSql(sql);
-
-            var expectedCond = "IF OBJECT_ID('HuiYiMapping') IS NULL  ";
-
-            Assert.Equal(expectedCond.NormalizeLineEndings(), cond.NormalizeLineEndings());
-            Assert.False(string.IsNullOrWhiteSpace(other));
-            Assert.Contains("CREATE TABLE HuiYiMapping", other, System.StringComparison.OrdinalIgnoreCase);
-        }
-
-        // Add unit tests for IfConditionUtils.IsExistsWithSubqueryFormat
-
-        [Fact]
-        public void IsExistsWithSubqueryFormat_PositiveAndNegativeCases()
-        {
-            var positive = @"if exists(select distinct * from (
-    select hotelCode as hid from posSmMappingHid
-    union all
-    select groupid from posSmMappingHid)a
-    where ISNULL(a.hid,'')!='' and hid not in(select hid from hotelProducts where productCode='ipos'))";
-
-            Assert.True(IfConditionUtils.IsExistsPosSMMappingHidInHotelProductsWithSubqueryFormat(positive));
-
-            // Missing posSmMappingHid
-            var negative1 = @"if exists(select distinct * from (
-    select hotelCode as hid from otherTable
-    union all
-    select groupid from otherTable)a
-    where ISNULL(a.hid,'')!='' and hid not in(select hid from hotelProducts where productCode='ipos'))";
-            Assert.False(IfConditionUtils.IsExistsPosSMMappingHidInHotelProductsWithSubqueryFormat(negative1));
-
-            // Missing not in clause
-            var negative2 = @"if exists(select distinct * from (
-    select hotelCode as hid from posSmMappingHid
-    union all
-    select groupid from posSmMappingHid)a
-    where ISNULL(a.hid,'')!='')";
-            Assert.False(IfConditionUtils.IsExistsPosSMMappingHidInHotelProductsWithSubqueryFormat(negative2));
-
-            // Different productCode value
-            var negative3 = @"if exists(select distinct * from (
-    select hotelCode as hid from posSmMappingHid
-    union all
-    select groupid from posSmMappingHid)a
-    where ISNULL(a.hid,'')!='' and hid not in(select hid from hotelProducts where productCode='other'))";
-            Assert.False(IfConditionUtils.IsExistsPosSMMappingHidInHotelProductsWithSubqueryFormat(negative3));
-        }
+        var ok = tokens.IsIfNotExistsFromSyscolumnsWhereIdAndName(out var table, out var column);
+        Assert.True(ok);
+        Assert.Equal("hotelpos", table);
+        Assert.Equal("id", column);
     }
 }

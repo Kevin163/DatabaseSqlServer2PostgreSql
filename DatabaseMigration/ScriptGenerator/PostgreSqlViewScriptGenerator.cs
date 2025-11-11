@@ -10,10 +10,6 @@ namespace DatabaseMigration.ScriptGenerator;
 public class PostgreSqlViewScriptGenerator : PostgreSqlScriptGenerator
 {
     /// <summary>
-    /// 最终生成的SQL脚本
-    /// </summary>
-    private StringBuilder _sqlStringBuilder = new StringBuilder();
-    /// <summary>
     /// 第一行select语句中的列名
     /// </summary>
     private List<string> _columnNames = new List<string>();
@@ -30,78 +26,11 @@ public class PostgreSqlViewScriptGenerator : PostgreSqlScriptGenerator
     /// </summary>
     private bool _isCurrentColumnHasIdentity = false;
     /// <summary>
-    /// 生成视图脚本
-    /// </summary>
-    /// <param name="fragment"></param>
-    /// <returns></returns>
-    public override string GenerateSqlScript(TSqlFragment fragment)
-    {
-        var len = fragment.ScriptTokenStream.Count;
-        for (var i = 0;i<len;)
-        {
-            var sqlTokens = fragment.GetFirstCompleteSqlTokens(ref i);
-            var sqlTokenType = sqlTokens.GetFirstNotWhiteSpaceTokenType();
-            //如果是块注释或者单行注释，则直接添加
-            if (sqlTokenType == TSqlTokenType.MultilineComment || sqlTokenType == TSqlTokenType.SingleLineComment)
-            {
-                _sqlStringBuilder.Append(string.Concat(sqlTokens.Select(w => w.Text)));
-                continue;
-            }
-            //如果是create view语句，则进行特殊处理
-            if(sqlTokenType == TSqlTokenType.Create)
-            {
-                _sqlStringBuilder.Append(GetCreateViewSql(sqlTokens));
-                continue;
-            }
-            //如果是select语句，则进行特殊处理
-            if(sqlTokenType == TSqlTokenType.Select)
-            {
-                _sqlStringBuilder.Append(GetSelectSql(sqlTokens));
-                continue;
-            }
-            //非特殊语句，则直接添加
-            foreach(var item in sqlTokens)
-            {
-                _sqlStringBuilder.Append(item.Text);
-            }
-        }
-        return _sqlStringBuilder.ToString();
-    }
-    /// <summary>
-    /// 生成Create View语句
-    /// </summary>
-    /// <param name="tokens"></param>
-    /// <returns></returns>
-    private static string GetCreateViewSql(List<TSqlParserToken> tokens)
-    {
-        var sb = new StringBuilder();
-        for(var i =0;i<tokens.Count;i++)
-        {
-            var item = tokens[i];
-            //处理create,替换为create or replace
-            if (item.TokenType == TSqlTokenType.Create)
-            {
-                sb.Append("CREATE OR REPLACE ");
-                continue;
-            }
-            //处理dbo.name这样的标识符，去掉前面的dbo.
-            if (item.TokenType == TSqlTokenType.AsciiStringOrQuotedIdentifier || item.TokenType == TSqlTokenType.QuotedIdentifier)
-            {
-                sb.Append(tokens.GetIdentityName(ref i));
-                continue;
-            }
-            sb.Append(item.Text);
-        }
-        //由于create view是到as就结束了，所以在最后需要补上一个换行
-        sb.AppendLine();
-        return sb.ToString();
-    }
-    /// <summary>
     /// 生成Select语句
     /// </summary>
     /// <param name="tokens"></param>
     /// <returns></returns>
-    private string GetSelectSql(List<TSqlParserToken> tokens)
+    protected override string ConvertSelectSql(IList<TSqlParserToken> tokens)
     {
         int lastEndLineIndex = 0;
         var sb = new StringBuilder();

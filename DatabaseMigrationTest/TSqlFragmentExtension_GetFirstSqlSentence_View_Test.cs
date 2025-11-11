@@ -60,10 +60,11 @@ select '05' ,'客人来源'  ,'集团分发'
 drop view  m_v_basicDataType 
 select * from m_v_basicDataType
 select distinct  typecode, typename  from codelist
-*/";
+*/
+";
         Assert.Equal(expectedFirst, string.Concat(tokens.Select(w => w.Text)));
         Assert.Equal(tokens.Count, startIndex);
-        Assert.Equal(1, startIndex);
+        Assert.Equal(2, startIndex);
     }
     /// <summary>
     /// 场景：带注释的完整视图创建语句。
@@ -77,13 +78,12 @@ select distinct  typecode, typename  from codelist
 
         Assert.Empty(errors);
 
-        int startIndex = 1;
+        int startIndex = 2;
         var tokens = fragment.GetFirstCompleteSqlTokens(ref startIndex);
-        var expectedFirst = @"
-CREATE  view m_v_basicDataType
+        var expectedFirst = @"CREATE  view m_v_basicDataType
 as";
         Assert.Equal(expectedFirst, string.Concat(tokens.Select(w => w.Text)));
-        Assert.Equal(tokens.Count + 1, startIndex);
+        Assert.Equal(tokens.Count + 2, startIndex);
         Assert.Equal(9, startIndex);
     }
     /// <summary>
@@ -98,13 +98,12 @@ as";
 
         Assert.Empty(errors);
 
-        int startIndex = 9;
+        int startIndex = 10;
         var tokens = fragment.GetFirstCompleteSqlTokens(ref startIndex);
-        var expectedFirst = @"
-select 'mbrCardType' as code,'会员卡类型' as name,'集团管控' as dataControl
+        var expectedFirst = @"select 'mbrCardType' as code,'会员卡类型' as name,'集团管控' as dataControl
 ";
         Assert.Equal(expectedFirst, string.Concat(tokens.Select(w => w.Text)));
-        Assert.Equal(tokens.Count + 9, startIndex);
+        Assert.Equal(tokens.Count + 10, startIndex);
         Assert.Equal(30, startIndex);
     }
 
@@ -140,13 +139,12 @@ select 'mbrCardType' as code,'会员卡类型' as name,'集团管控' as dataCon
 
         Assert.Empty(errors);
 
-        int startIndex = 33;
+        int startIndex = 34;
         var tokens = fragment.GetFirstCompleteSqlTokens(ref startIndex);
-        var expectedFirst = @"
-select 'corpType' , '合约单位类型'  ,'集团管控' 
+        var expectedFirst = @"select 'corpType' , '合约单位类型'  ,'集团管控' 
 ";
         Assert.Equal(expectedFirst, string.Concat(tokens.Select(w => w.Text)));
-        Assert.Equal(tokens.Count + 33, startIndex);
+        Assert.Equal(tokens.Count + 34, startIndex);
         Assert.Equal(46, startIndex);
     }
     /// <summary>
@@ -180,14 +178,14 @@ select 'corpType' , '合约单位类型'  ,'集团管控'
 
         Assert.Empty(errors);
 
-        int startIndex = 47;
+        int startIndex = 48;
         var tokens = fragment.GetFirstCompleteSqlTokens(ref startIndex);
-        var expectedFirst = @"
-select '20' , '优惠券类别'  ,'集团管控' 
+        var expectedFirst = @"select '20' , '优惠券类别'  ,'集团管控' 
+/*union all select '04','市场分类'  ,'集团分发'  */
 ";
         Assert.Equal(expectedFirst, string.Concat(tokens.Select(w => w.Text)));
-        Assert.Equal(tokens.Count + 47, startIndex);
-        Assert.Equal(60, startIndex);
+        Assert.Equal(tokens.Count + 48, startIndex);
+        Assert.Equal(62, startIndex);
     } 
     #endregion
     #region 复杂的单个select语句视图创建语句单元测试
@@ -228,22 +226,20 @@ from  hotel a left join
 
         Assert.Empty(errors);
 
-        int startIndex = 9;
+        int startIndex = 11;
         var tokens = fragment.GetFirstCompleteSqlTokens(ref startIndex);
-        var expectedFirst = @"  
-select a.grpid ,hid ,a.name , servername = b.name  , dbName  = c.name   , db = c.dbName , intIp = c.intIp , dbServer = c.dbServer ,createDate  
+        var expectedFirst = @"select a.grpid ,hid ,a.name , servername = b.name  , dbName  = c.name   , db = c.dbName , intIp = c.intIp , dbServer = c.dbServer ,createDate  
 from  hotel a left join   
  serverList b on a.serverid = b.id  left join   
  dblist c  on a.dbid = c.id";
         Assert.Equal(expectedFirst, string.Concat(tokens.Select(w => w.Text)));
-        Assert.Equal(tokens.Count + 9, startIndex);
-        Assert.Equal(129, startIndex);
+        Assert.Equal(tokens.Count + 11, startIndex);
+        Assert.Equal(128, startIndex);
     }
     #endregion
     #region 使用()括起来的特殊语句单元测试
     //复杂的select语句和union组成的语句，但将所有语句都使用()括起来的特殊视图创建语句
-    private const string _viewSql3 = @"  
-CREATE view v_templateIdCloseStatus  
+    private const string _viewSql3 = @"CREATE view v_templateIdCloseStatus  
 as  
 (  
  select   
@@ -289,16 +285,15 @@ as
 
         int startIndex = 0;
         var tokens = fragment.GetFirstCompleteSqlTokens(ref startIndex);
-        var expectedFirst = @"  
-CREATE view v_templateIdCloseStatus  
+        var expectedFirst = @"CREATE view v_templateIdCloseStatus  
 as";
         Assert.Equal(expectedFirst, string.Concat(tokens.Select(w => w.Text)));
         Assert.Equal(tokens.Count, startIndex);
-        Assert.Equal(10, startIndex);
+        Assert.Equal(8, startIndex);
     }
     /// <summary>
     /// 场景：带注释的完整视图创建语句。
-    /// 期望：从1开始获取第一个完整SQL语句，应该返回select语句前面的部分
+    /// 获取以（开头的语句，则需要获取到对应的）为止。
     /// </summary>
     [Fact]
     public void GetFirstCompleteSqlSentenceFromCreateView3_From10_ReturnsBeforeSelect()
@@ -310,41 +305,153 @@ as";
 
         int startIndex = 10;
         var tokens = fragment.GetFirstCompleteSqlTokens(ref startIndex);
-        var expectedFirst = @"  
-(  
- ";
+        var expectedFirst = @"(  
+ select   
+ 'xWv-ZHvbvyGOqbKFHyfCCjmmJmDHyS6wm_O81lgImd4' as templateId,--模板ID  
+ '维修单通知' as templateName,--模板名称  
+ '0' as [status]--是否启用（1：启用此规则，0：禁用此规则）  
+  
+ UNION SELECT  'wV6PUtNF2D3klC4x-tw-AGmbdbUXkpszVXUTgjpxFHc','审批状态变更通知','0'  
+ UNION SELECT  'ul8w_ASaz5CQODS6swFhnhhcDCRD_gTmZz6H2wzNa4s','预约状态提醒','0'  
+ UNION SELECT  'hI9x7S8pwkofKnOKbqoQRtiKT8koTTrrmiBg8s_zd6U','报表提醒','0'  
+ UNION SELECT  'dwInZkl_zxBsMVvkhD_9bvdHxzk2PZnVEVBmAcHCJcI','查房请求通知','0'  
+ UNION SELECT  'd2yfej0ekuSZemEkpLgX-3l6MHEvA7DwTgKwBSV9uwg','新订单提醒','0'  
+ UNION SELECT  'b6795-XBp-nRGFMZHV7qUOnPBjBBF7O9bNzVjt5_rxM','商品已发出通知','0'  
+ UNION SELECT  '_6iDu0CSCRmFSZKoni_OXiobcV9FnV73wFrmL9rkOMA','受理成功通知','0'  
+ UNION SELECT  'Zww8L4pKDkziuxAG3Tt20DEUcOfL9L7aF1AVnGW4rvU','收到投诉建议通知','0'  
+ UNION SELECT  'ZRjc5XColreLqhQAtRy-1T3NKAU-s-9e5ml9YX-8tbY','授权提醒','0'  
+ UNION SELECT  'YWU2lVIg8nxb2eRe3A6yC6GuuqhwV39NibYB-KoYxEY','宴会厅预定失败通知','0'  
+ UNION SELECT  'QQ0NrwGRxwdbrVIo7nIU792Kvsn9rmi2OYIvqYYVv74','预约工单提醒','0'  
+ UNION SELECT  'MmZ85uJWoOwDawbNW2zsxkJejyblNORMksB4x91g9-s','会员到店通知','0'  
+ UNION SELECT  'LS2240uv4p7RmaOpKDwVO033ra3DLw3CXM_eSiIB1fI','订单取消通知','0'  
+ UNION SELECT  'KY2FbBM-OBLXOZ2OSBIwAq5wKaic_l1NeeVMRPfquA0','审批状态更新通知','0'  
+ UNION SELECT  'K-swag2XZG3QOYgwt9p8jggl1DKvtXgSCk7nhJt9SB8','入住通知','0'  
+ UNION SELECT  'InzsO7HWESGxKyg-lLD1iU557zu_22kvDcawKYycg38','收到保洁单通知','0'  
+ UNION SELECT  'BKFZRuty-XnWSzjBoapGj38AJOa2BJL2TF8SvnimA3s','搬家申请成功通知','0'  
+ UNION SELECT  '9Q7km_EbBOTbpvErVVoRksBHsewqjI7kXvnJcl_eMi8','商品已发出通知','0'  
+ UNION SELECT  '94GqDR1RUHWGFsiAIrMcXARN62nz8f4Jwwtxxg6t8V4','服务评价提醒','0'  
+ UNION SELECT  '68d4grtT_dFsmlpmf6v3key9GWq58T1i23xj1uj3doE','上钟通知','0'  
+ UNION SELECT  '4q_kChg-yZFa25r0kUXgtDLPQ_4OlB16w9AB4tqgP-8','投诉受理状态通知','0'  
+ UNION SELECT  '3el_I5tWfugtoxU7S2Uf9J2RXsuyvD5tXz7YFXei_Kc','会员到期提醒','0'  
+ UNION SELECT  '2OeR3MP2WXUeTeybzT-pf1hmkF2WT8r2FY29-BQGDNE','设备维护提醒','0'  
+)";
         Assert.Equal(expectedFirst, string.Concat(tokens.Select(w => w.Text)));
         Assert.Equal(tokens.Count + 10, startIndex);
-        Assert.Equal(16, startIndex);
+        Assert.Equal(322, startIndex);
     }
     /// <summary>
-    /// 场景：带注释的完整视图创建语句。
-    /// 期望：从1开始获取第一个完整SQL语句，应该返回select语句
+    /// 验证从整个语句中先获取（）的语句块，然后再从其内部语句中获取第一个select语句
     /// </summary>
     [Fact]
-    public void GetFirstCompleteSqlSentenceFromCreateView3_From16_ReturnsSelect()
+    public void GetFirstCompleteSqlSentenceFromCreateView3_FromInner3_ReturnsSelect()
     {
         var parser = new TSql170Parser(true);
         var fragment = parser.Parse(new System.IO.StringReader(_viewSql3), out var errors);
 
         Assert.Empty(errors);
 
-        int startIndex = 16;
+        //获取括号语句块
+        int startIndex = 10;
         var tokens = fragment.GetFirstCompleteSqlTokens(ref startIndex);
+        //获取括号内的语句块
+        var innerStartIndex = 0;
+        var innerTokens = tokens.GetInnerSqls(ref innerStartIndex);
+        //获取第一个select语句,跳过前面的空格
+        innerStartIndex = 3;
+        var innerSqlsFirstTokens = innerTokens.GetFirstCompleteSqlTokens(ref innerStartIndex);
         var expectedFirst = @"select   
  'xWv-ZHvbvyGOqbKFHyfCCjmmJmDHyS6wm_O81lgImd4' as templateId,--模板ID  
  '维修单通知' as templateName,--模板名称  
  '0' as [status]--是否启用（1：启用此规则，0：禁用此规则）  
-";
-        Assert.Equal(expectedFirst, string.Concat(tokens.Select(w => w.Text)));
-        Assert.Equal(tokens.Count + 16, startIndex);
-        Assert.Equal(45, startIndex);
+  
+ ";
+        Assert.Equal(expectedFirst, string.Concat(innerSqlsFirstTokens.Select(w => w.Text)));
+        Assert.Equal(innerSqlsFirstTokens.Count + 3, innerStartIndex);
+        Assert.Equal(35, innerStartIndex);
+    }
+    /// <summary>
+    /// 从（）语句块内的union开始获取，则返回union本身
+    /// </summary>
+    [Fact]
+    public void GetFirstCompleteSqlSentenceFromCreateView3_FromInner35_ReturnsSelect()
+    {
+        var parser = new TSql170Parser(true);
+        var fragment = parser.Parse(new System.IO.StringReader(_viewSql3), out var errors);
+
+        Assert.Empty(errors);
+
+        //获取括号语句块
+        int startIndex = 10;
+        var tokens = fragment.GetFirstCompleteSqlTokens(ref startIndex);
+        //获取括号内的语句块
+        var innerStartIndex = 0;
+        var innerTokens = tokens.GetInnerSqls(ref innerStartIndex);
+        //获取第一个select语句,跳过前面的空格
+        innerStartIndex = 35;
+        var innerSqlsFirstTokens = innerTokens.GetFirstCompleteSqlTokens(ref innerStartIndex);
+        var expectedFirst = @"UNION";
+        Assert.Equal(expectedFirst, string.Concat(innerSqlsFirstTokens.Select(w => w.Text)));
+        Assert.Equal(innerSqlsFirstTokens.Count + 35, innerStartIndex);
+        Assert.Equal(36, innerStartIndex);
+    }
+
+    /// <summary>
+    /// 从（）语句块内的union后面的空格开始获取，则返回select前面的所有空格
+    /// </summary>
+    [Fact]
+    public void GetFirstCompleteSqlSentenceFromCreateView3_FromInner36_ReturnsSelect()
+    {
+        var parser = new TSql170Parser(true);
+        var fragment = parser.Parse(new System.IO.StringReader(_viewSql3), out var errors);
+
+        Assert.Empty(errors);
+
+        //获取括号语句块
+        int startIndex = 10;
+        var tokens = fragment.GetFirstCompleteSqlTokens(ref startIndex);
+        //获取括号内的语句块
+        var innerStartIndex = 0;
+        var innerTokens = tokens.GetInnerSqls(ref innerStartIndex);
+        //获取第一个select语句,跳过前面的空格
+        innerStartIndex = 36;
+        var innerSqlsFirstTokens = innerTokens.GetFirstCompleteSqlTokens(ref innerStartIndex);
+        var expectedFirst = @" ";
+        Assert.Equal(expectedFirst, string.Concat(innerSqlsFirstTokens.Select(w => w.Text)));
+        Assert.Equal(innerSqlsFirstTokens.Count + 36, innerStartIndex);
+        Assert.Equal(37, innerStartIndex);
+    }
+
+    /// <summary>
+    /// 从（）语句块内的union后面的select开始获取，则返回select语句本身，直到下一个union
+    /// </summary>
+    [Fact]
+    public void GetFirstCompleteSqlSentenceFromCreateView3_FromInner37_ReturnsSelect()
+    {
+        var parser = new TSql170Parser(true);
+        var fragment = parser.Parse(new System.IO.StringReader(_viewSql3), out var errors);
+
+        Assert.Empty(errors);
+
+        //获取括号语句块
+        int startIndex = 10;
+        var tokens = fragment.GetFirstCompleteSqlTokens(ref startIndex);
+        //获取括号内的语句块
+        var innerStartIndex = 0;
+        var innerTokens = tokens.GetInnerSqls(ref innerStartIndex);
+        //获取第一个select语句,跳过前面的空格
+        innerStartIndex = 37;
+        var innerSqlsFirstTokens = innerTokens.GetFirstCompleteSqlTokens(ref innerStartIndex);
+        var expectedFirst = @"SELECT  'wV6PUtNF2D3klC4x-tw-AGmbdbUXkpszVXUTgjpxFHc','审批状态变更通知','0'  
+ ";
+        Assert.Equal(expectedFirst, string.Concat(innerSqlsFirstTokens.Select(w => w.Text)));
+        Assert.Equal(innerSqlsFirstTokens.Count + 37, innerStartIndex);
+        Assert.Equal(47, innerStartIndex);
     }
     #endregion
     [Fact]
     public void Test()
     {
-        var sql = "select distinct 'Engineering' as 'Product',hid,openId as 'openid' from dbo.emWorkerMapping --云工程维修工的微信openid映射表";
+        var sql = @"  DELETE roleauth WHERE authcode NOT IN (SELECT authcode FROM authlist)  ";
         var parser = new TSql170Parser(true);
         var fragment = parser.Parse(new System.IO.StringReader(sql), out var errors);
 

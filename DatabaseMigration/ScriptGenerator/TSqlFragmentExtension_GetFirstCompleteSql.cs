@@ -15,110 +15,84 @@ public static class TSqlFragmentExtension_GetFirstCompleteSql
     /// <returns></returns>
     public static List<TSqlParserToken> GetFirstCompleteSqlTokens(this TSqlFragment fragment, ref int index)
     {
+        return fragment.ScriptTokenStream.GetFirstCompleteSqlTokens(ref index);
+    }
+    /// <summary>
+    /// 从指定的Token列表中获取从指定索引开始的第一个完整的SQL语句的所有Token
+    /// </summary>
+    /// <param name="tokens"></param>
+    /// <param name="index"></param>
+    /// <returns></returns>
+    public static List<TSqlParserToken> GetFirstCompleteSqlTokens(this IList<TSqlParserToken> tokens, ref int index)
+    {
         //确保索引在合理范围内
-        if (index < 0 || index >= fragment.ScriptTokenStream.Count)
+        if (index < 0 || index >= tokens.Count)
         {
             return new List<TSqlParserToken>();
         }
-        var sqlTokens = new List<TSqlParserToken>();
-        for (; index < fragment.ScriptTokenStream.Count; index++)
+        #region 判断是否是union,union all这样的特殊token，是则直接返回
+        //判断是否是union,union all这样的特殊token，是则直接返回
+        var firstToken = tokens[index];
+        if (firstToken.TokenType == TSqlTokenType.Union)
         {
-            var item = fragment.ScriptTokenStream[index];
-            #region 处理注释
-            //如果当前语句是块注释，并且前面没有任何Token，则将整个块注释作为一个完整的SQL语句返回
-            if ((item.TokenType == TSqlTokenType.MultilineComment || item.TokenType == TSqlTokenType.SingleLineComment)
-                && sqlTokens.Count(w => w.TokenType != TSqlTokenType.WhiteSpace) == 0)
+            //判断后面是否紧跟着all
+            var nextTokens = tokens.Skip(index + 1).Take(10).ToList();
+            var nextTokenType = nextTokens.GetFirstNotWhiteSpaceTokenType();
+            if (nextTokenType == TSqlTokenType.All)
             {
-                sqlTokens.Add(item);
-                index++;
-                break;
-            } 
-            #endregion
-            #region 处理if语句及语句块
-            //如果当前语句是if，并且前面没有任何Token，则将整个if块作为一个完整的SQL语句返回
-            if (item.TokenType == TSqlTokenType.If
-                && sqlTokens.Count(w => w.TokenType != TSqlTokenType.WhiteSpace) == 0)
-            {
-                var ifTokens = fragment.GetIfCompleteSql(ref index);
-                sqlTokens.AddRange(ifTokens);
-                break;
-            } 
-            #endregion
-            #region 处理create 语句
-            //如果当前语句是create，并且前面没有任何Token，则将整个create块作为一个完整的SQL语句返回
-            if (item.TokenType == TSqlTokenType.Create
-                && sqlTokens.Count(w => w.TokenType != TSqlTokenType.WhiteSpace) == 0)
-            {
-                var createTokens = fragment.GetCompleteCreateSql(ref index);
-                sqlTokens.AddRange(createTokens);
-                break;
-            } 
-            #endregion
-            #region 处理union /union all
-            //如果当前语句是union，并且前面已经有Token，则认为前面的Token已经构成一个完整的SQL语句，返回前面的语句，否则返回union自身
-            if (item.TokenType == TSqlTokenType.Union)
-            {
-                if (sqlTokens.Count(w => w.TokenType != TSqlTokenType.WhiteSpace) > 0)
-                {
-                    //前面已经有Token，认为前面的Token已经构成一个完整的SQL语句，返回前面的语句
-                    break;
-                }
-                else
-                {
-                    //前面没有任何Token，认为union自身作为一个完整的SQL语句返回
-                    sqlTokens.Add(item);
-                    index++;
-                    //需要判断union all这种情况，如果是的话，则返回union all
-                    var nextTokens = fragment.ScriptTokenStream.Skip(index).Take(5).ToList();
-                    var nextTokenType = nextTokens.GetFirstNotWhiteSpaceTokenType();
-                    if (nextTokenType == TSqlTokenType.All)
-                    {
-                        for (var j = 0; j < nextTokens.Count; j++)
-                        {
-                            sqlTokens.Add(nextTokens[j]);
-                            if (nextTokens[j].TokenType == TSqlTokenType.All)
-                            {
-                                index += j + 1;
-                                break;
-                            }
-                        }
-                    }
-                    break;
-                }
+                var tokenAllIndex = nextTokens.FindIndex(t => t.TokenType == TSqlTokenType.All);
+                index += tokenAllIndex + 2;
+                return new List<TSqlParserToken> { firstToken }.Concat(nextTokens.Take(tokenAllIndex + 1)).ToList();
             }
-            #endregion
-            #region 处理select语句
-            //如果当前语句是select，并且之前的语句并非某些特殊类型的语句，则认为之前的语句已经完整，直接返回
-            if (item.TokenType == TSqlTokenType.Select
-                && sqlTokens.Count(w => w.TokenType != TSqlTokenType.WhiteSpace) > 0)
-            {
-                break;
-            }
-            #endregion
-            #region 处理行尾的换行符，根据换行符后的内容来决定当前语句是否完整
-            //如果当前是\r\n这种换行符，则检查下一个token，并且跳过注释，如果下一个token是union,则认为当前语句已经完整，直接返回
-            if (item.TokenType == TSqlTokenType.WhiteSpace && item.Text.Equals("\r\n"))
-            {
-                var nextTokens = fragment.ScriptTokenStream.Skip(index + 1).Take(10).ToList();
-                var nextTokenType = nextTokens.GetFirstNotWhiteSpaceTokenType(skipComment: true);
-                if (nextTokenType == TSqlTokenType.Union)
-                {
-                    sqlTokens.Add(item);
-                    index++;
-                    break;
-                }
-            } 
-            #endregion
-            //其他情况下，则直接认为当前项是语句的一部分
-            sqlTokens.Add(item);
-            //如果是分号，则表示一个完整的SQL语句结束
-            if (item.TokenType == TSqlTokenType.Semicolon)
-            {
-                index++;
-                break;
-            }
+            //否则只返回union
+            index++;
+            return new List<TSqlParserToken> { firstToken };
+        } 
+        #endregion
+        //优先取出指定index开始后的所有token，然后转换成SQL语句，并再次进行解析，以便直接获取第一个完整的SQL语句
+        var tokensToEnd = tokens.Skip(index).ToList();
+        var sqlToEnd = string.Concat(tokensToEnd.Select(w => w.Text));
+        if (string.IsNullOrWhiteSpace(sqlToEnd))
+        {
+            index = tokens.Count;
+            return new List<TSqlParserToken>();
         }
-
-        return sqlTokens;
+        var parser = new TSql170Parser(true);
+        var newFragment = parser.Parse(new System.IO.StringReader(sqlToEnd), out var errors) as TSqlScript;
+        #region 处理整个语句是create...as ...类型的语句，则只返回create ... as
+        //如果只有一条批量语句，并且开始位置的第一个是create，则表示可能是整个create语句，需要先取出create ...as这样的做为第一个完整的语句进行返回
+        if (newFragment.Batches.Count == 1 && newFragment.ScriptTokenStream.Count > 0 && newFragment.ScriptTokenStream[0].TokenType == TSqlTokenType.Create)
+        {
+            var createIndex = 0;
+            var createTokens = newFragment.ScriptTokenStream.GetCompleteCreateSql(ref createIndex);
+            index += createIndex;
+            return createTokens;
+        }
+        #endregion
+        #region 处理整个语句是select ... union select ...的语句，则只返回第一个select...
+        //如果只有一个批量语句，并且开始位置的第一个是select语句，并且整个语句里面包含union，则说明是将select union...全部当成一个语句了，需要先只取出union前面的select语句
+        if(newFragment.Batches.Count == 1 && newFragment.ScriptTokenStream.Count > 0 && newFragment.ScriptTokenStream[0].TokenType == TSqlTokenType.Select && sqlToEnd.Contains("union", StringComparison.OrdinalIgnoreCase))
+        {
+            var unionIndex = newFragment.ScriptTokenStream.FindFirstIndex(t => t.TokenType == TSqlTokenType.Union);
+            var firstSelectTokens = newFragment.ScriptTokenStream.Take(unionIndex).ToList();
+            index += firstSelectTokens.Count;
+            return firstSelectTokens;
+        }
+        #endregion
+        //取出第一个语句的起始和结束位置
+        var firstStatement = newFragment.Batches[0].Statements[0];
+        var startIndex = firstStatement.FirstTokenIndex;
+        var endIndex = firstStatement.LastTokenIndex;
+        //这里给出的语句都是有真实意义的语句，如果如果startIndex>0，则表示前面有内容被跳过了，需要先返回这些内容，一般都是空白或注释，直接做为完整的语句进行返回即可
+        if (startIndex > 0)
+        {
+            index += startIndex;
+            return tokensToEnd.Take(startIndex).ToList();
+        }
+        //取出第一个语句的所有Token
+        var firstSqlTokens = tokensToEnd.Skip(startIndex).Take(endIndex - startIndex + 1).ToList();
+        //更新传入的index参数，指向下一个语句的起始位置
+        index += firstSqlTokens.Count;
+        return firstSqlTokens;
     }
 }
