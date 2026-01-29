@@ -25,13 +25,13 @@ namespace DatabaseMigration.Migration
         /// 如果 <paramref name="sb"/> 非空且末尾不是分号，则在末尾追加分号。
         /// </summary>
         /// <param name="sb">要操作的 <see cref="StringBuilder"/> 实例。不能为 <c>null</c>。</param>
-        public static void AppendSemicolonIfMissing(this StringBuilder sb)
+        public static void AppendIfMissing(this StringBuilder sb,char c)
         {
             ArgumentNullException.ThrowIfNull(sb);
             // 使用 sb[sb.Length - 1] 而不是索引运算符 ^1，以兼容 StringBuilder（不支持从末尾的 Index 运算符）。
-            if (sb.Length > 0 && sb[sb.Length - 1] != ';')
+            if (sb.Length > 0 && sb[sb.Length - 1] != c)
             {
-                sb.Append(';');
+                sb.Append(c);
             }
         }
     }

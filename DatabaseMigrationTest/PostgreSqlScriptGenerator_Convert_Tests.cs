@@ -1,4 +1,4 @@
-using DatabaseMigration.Migration;
+﻿using DatabaseMigration.Migration;
 using DatabaseMigration.ScriptGenerator;
 
 namespace DatabaseMigrationTest

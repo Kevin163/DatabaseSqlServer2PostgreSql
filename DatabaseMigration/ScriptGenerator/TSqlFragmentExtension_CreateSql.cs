@@ -44,7 +44,8 @@ public static class TSqlFragmentExtension_CreateSql
                 break;
             }
         }
-        //如果没有找到，则认为是异常情况，直接返回空列表
-        return new List<TSqlParserToken>();
+        //其他情况下，则认为整个语句就是一个完成的create语句
+        index = tokens.Count;
+        return tokens.ToList();
     }
 }

@@ -93,7 +93,7 @@ as
  '0' as [status]--是否启用（1：启用此规则，0：禁用此规则）  
   
  UNION SELECT  'wV6PUtNF2D3klC4x-tw-AGmbdbUXkpszVXUTgjpxFHc','审批状态变更通知','0'  
- UNION SELECT  'ul8w_ASaz5CQODS6swFhnhhcDCRD_gTmZz6H2wzNa4s','预约状态提醒','0'  
+ UNION SELECT  'ul8w_ASaz5CQODS6swFhnhhcDCRD_gTmZz6H2wzNa4s','预约状态提醒','0'
 )";
 
         var parser = new TSql170Parser(true);

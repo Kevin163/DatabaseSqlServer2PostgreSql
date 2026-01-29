@@ -39,7 +39,15 @@ public enum TSqlTokenTypeAction
     /// </summary>
     Check,
     /// <summary>
-    /// 获取其值并进行返回
+    /// 获取其值并进行返回,直接返回值不做任何额外处理
     /// </summary>
-    OutValue
+    OutValue,
+    /// <summary>
+    /// 获取其标识符形式并进行返回，需要处理dbo.XXX为XXX
+    /// </summary>
+    OutIdentifier,
+    /// <summary>
+    /// 获取列定义，比如列名+数据类型+约束等完整定义
+    /// </summary>
+    OutColumnDefinition,
 }

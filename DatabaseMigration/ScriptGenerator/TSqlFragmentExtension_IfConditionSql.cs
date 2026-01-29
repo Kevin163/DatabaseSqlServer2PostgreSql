@@ -144,16 +144,16 @@ public static class TSqlFragmentExtension_IfConditionSql
             new TSqlTokenTypeItem(TSqlTokenType.AsciiStringLiteral, action:TSqlTokenTypeAction.OutValue), 
             new TSqlTokenTypeItem(TSqlTokenType.RightParenthesis),
             new TSqlTokenTypeItem(TSqlTokenType.And),
-            new TSqlTokenTypeItem(TSqlTokenType.Identifier,value:"name"),
+            new TSqlTokenTypeItem(new List<TSqlTokenType>{TSqlTokenType.Identifier,TSqlTokenType.QuotedIdentifier },value:"name"),
             new TSqlTokenTypeItem(TSqlTokenType.EqualsSign),
             new TSqlTokenTypeItem(TSqlTokenType.AsciiStringLiteral, action:TSqlTokenTypeAction.OutValue),
             new TSqlTokenTypeItem(TSqlTokenType.RightParenthesis),
         };
-        var isMatch = tokens.IsMatchTokenTypesSequence(tokenTypes, out var outValues);
-        if (isMatch && outValues.Count == 2)
+        var matchResult = tokens.IsMatchTokenTypesSequence(tokenTypes);
+        if (matchResult.IsMatch && matchResult.OutValues.Count == 2)
         {
-            tableName = outValues[0].ToPostgreSqlIdentifier();
-            columnName = outValues[1].ToPostgreSqlIdentifier();
+            tableName = matchResult.OutValues[0].ToPostgreSqlIdentifier();
+            columnName = matchResult.OutValues[1].ToPostgreSqlIdentifier();
             return true;
         }
         return false;
@@ -178,10 +178,10 @@ public static class TSqlFragmentExtension_IfConditionSql
             new TSqlTokenTypeItem(TSqlTokenType.Is),
             new TSqlTokenTypeItem(TSqlTokenType.Null),
         };
-        var isMatch = tokens.IsMatchTokenTypesSequence(tokenTypes, out var outValues);
-        if (isMatch && outValues.Count == 1)
+        var matchResult = tokens.IsMatchTokenTypesSequence(tokenTypes);
+        if (matchResult.IsMatch && matchResult.OutValues.Count == 1)
         {
-            objectName = outValues[0].ToPostgreSqlIdentifier();
+            objectName = matchResult.OutValues[0].ToPostgreSqlIdentifier();
             return true;
         }
         return false;
@@ -213,10 +213,10 @@ public static class TSqlFragmentExtension_IfConditionSql
             new TSqlTokenTypeItem(new List<TSqlTokenType>{TSqlTokenType.AsciiStringLiteral,TSqlTokenType.UnicodeStringLiteral,TSqlTokenType.AsciiStringOrQuotedIdentifier }, action: TSqlTokenTypeAction.OutValue),
             new TSqlTokenTypeItem(TSqlTokenType.RightParenthesis),
         };
-        var isMatch = tokens.IsMatchTokenTypesSequence(tokenTypes, out var outValues);
-        if (isMatch && outValues.Count == 1)
+        var matchResult = tokens.IsMatchTokenTypesSequence(tokenTypes);
+        if (matchResult.IsMatch && matchResult.OutValues.Count == 1)
         {
-            codeValue = outValues[0];
+            codeValue = matchResult.OutValues[0];
             return true;
         }
         return false;
@@ -247,10 +247,10 @@ public static class TSqlFragmentExtension_IfConditionSql
             new TSqlTokenTypeItem(new List<TSqlTokenType>{TSqlTokenType.AsciiStringLiteral, TSqlTokenType.UnicodeStringLiteral, TSqlTokenType.AsciiStringOrQuotedIdentifier}, action: TSqlTokenTypeAction.OutValue),
             new TSqlTokenTypeItem(TSqlTokenType.RightParenthesis),
         };
-        var isMatch = tokens.IsMatchTokenTypesSequence(tokenTypes, out var outValues);
-        if (isMatch && outValues.Count == 1)
+        var matchResult = tokens.IsMatchTokenTypesSequence(tokenTypes);
+        if (matchResult.IsMatch && matchResult.OutValues.Count == 1)
         {
-            nameValue = outValues[0].ToPostgreSqlIdentifier();
+            nameValue = matchResult.OutValues[0].ToPostgreSqlIdentifier();
             return true;
         }
         return false;
@@ -304,49 +304,15 @@ public static class TSqlFragmentExtension_IfConditionSql
             new TSqlTokenTypeItem(TSqlTokenType.RightParenthesis),
         };
 
-        var isMatch = tokens.IsMatchTokenTypesSequence(tokenTypes, out var outValues);
+        var matchResult = tokens.IsMatchTokenTypesSequence(tokenTypes);
         // Expect two out values: first is table name (OBJECT_ID arg), second is index name
-        if (isMatch && outValues.Count == 2)
+        if (matchResult.IsMatch && matchResult.OutValues.Count == 2)
         {
-            tableName = outValues[0].ToPostgreSqlIdentifier();
-            indexName = outValues[1].ToPostgreSqlIdentifier();
+            tableName = matchResult.OutValues[0].ToPostgreSqlIdentifier();
+            indexName = matchResult.OutValues[1].TrimQuotes();
             return true;
         }
         return false;
-    }
-
-    /// <summary>
-    /// 判断tokens序列是否与tokenTypes序列匹配，并输出OutValue的值
-    /// </summary>
-    public static bool IsMatchTokenTypesSequence(this IList<TSqlParserToken> tokens, List<TSqlTokenTypeItem> tokenTypes, out List<string> outValues)
-    {
-        outValues = new List<string>();
-        if (tokens == null || tokenTypes == null) return false;
-        int i = 0, j = 0;
-        while (i < tokens.Count && j < tokenTypes.Count)
-        {
-            var token = tokens[i];
-            var typeItem = tokenTypes[j];
-            if (!typeItem.TokenTypes.Contains(token.TokenType))
-            {
-                //如果类型不匹配，则检查下一个Token
-                i++;
-                continue;
-            }
-            if (typeItem.Action == TSqlTokenTypeAction.Check && !string.IsNullOrEmpty(typeItem.CheckValue) && !string.Equals(token.Text.ToPostgreSqlIdentifier(), typeItem.CheckValue, StringComparison.OrdinalIgnoreCase))
-            {
-                //如果是检查值不匹配，则检查下一个Token
-                i++;
-                continue;
-            }
-            if (typeItem.Action == TSqlTokenTypeAction.OutValue)
-            {
-                outValues.Add(token.Text);
-            }
-            i++;
-            j++;
-        }
-        return j == tokenTypes.Count;
     }
 
     /// <summary>
@@ -374,7 +340,7 @@ public static class TSqlFragmentExtension_IfConditionSql
             new TSqlTokenTypeItem(TSqlTokenType.Where),
         };
 
-        if (!tokens.IsMatchTokenTypesSequence(headerTypes, out var _)) return false;
+        if (!tokens.IsMatchTokenTypesSequence(headerTypes).IsMatch) return false;
 
         // find WHERE after columns
         int whereIndex = -1;
@@ -437,12 +403,12 @@ public static class TSqlFragmentExtension_IfConditionSql
             new TSqlTokenTypeItem(TSqlTokenType.RightParenthesis),
         };
 
-        var isMatch = tokens.IsMatchTokenTypesSequence(tokenTypes, out var outValues);
-        if (!isMatch || outValues.Count != 3) return false;
+        var matchResult = tokens.IsMatchTokenTypesSequence(tokenTypes);
+        if (!matchResult.IsMatch || matchResult.OutValues.Count != 3) return false;
 
-        tableName = outValues[0].ToPostgreSqlIdentifier();
-        columnName = outValues[1].ToPostgreSqlIdentifier();
-        length = Convert.ToInt32(outValues[2]);
+        tableName = matchResult.OutValues[0].ToPostgreSqlIdentifier();
+        columnName = matchResult.OutValues[1].ToPostgreSqlIdentifier();
+        length = Convert.ToInt32(matchResult.OutValues[2]);
 
         return true;
     }
@@ -470,7 +436,7 @@ public static class TSqlFragmentExtension_IfConditionSql
             new TSqlTokenTypeItem(new List<TSqlTokenType>{TSqlTokenType.Identifier, TSqlTokenType.QuotedIdentifier}, value: "AuthButtons"),
             new TSqlTokenTypeItem(TSqlTokenType.Where),
         };
-        if (!tokens.IsMatchTokenTypesSequence(headerTypes, out var _)) return false;
+        if (!tokens.IsMatchTokenTypesSequence(headerTypes).IsMatch) return false;
 
         var whereIndex = -1;
         for(var i = 0; i < tokens.Count; i++)
@@ -538,10 +504,10 @@ public static class TSqlFragmentExtension_IfConditionSql
             // skipping the IN list details
             new TSqlTokenTypeItem(TSqlTokenType.RightParenthesis),
         };
-        var isMatch = tokens.IsMatchTokenTypesSequence(tokenTypes, out var outValues);
-        if (isMatch && outValues.Count == 1)
+        var matchResult = tokens.IsMatchTokenTypesSequence(tokenTypes);
+        if (matchResult.IsMatch && matchResult.OutValues.Count == 1)
         {
-            objectName = outValues[0].ToPostgreSqlIdentifier();
+            objectName = matchResult.OutValues[0].ToPostgreSqlIdentifier();
             return true;
         }
         return false;
@@ -588,8 +554,8 @@ public static class TSqlFragmentExtension_IfConditionSql
             new TSqlTokenTypeItem(TSqlTokenType.RightParenthesis),
             new TSqlTokenTypeItem(TSqlTokenType.RightParenthesis),
         };
-        var isMatch = tokens.IsMatchTokenTypesSequence(tokenTypes, out var _);
-        return isMatch;
+        var matchResult = tokens.IsMatchTokenTypesSequence(tokenTypes);
+        return matchResult.IsMatch;
     }
     /// <summary>
     /// 解析 IF EXISTS(SELECT * FROM Table WHERE Column1='Value1' AND Column2='Value2') 这类语句的Token序列
@@ -656,5 +622,115 @@ public static class TSqlFragmentExtension_IfConditionSql
             i++;
         }
         return result;
+    }
+    /// <summary>
+    /// 解析 IF NOT EXISTS(SELECT * FROM sys.tables WHERE name = 'X') 这类语句，
+    /// 并输出where条件的name值（仅支持单一等值条件）
+    /// </summary>
+    /// <param name="tokens"></param>
+    /// <param name="nameValue"></param>
+    /// <returns></returns>
+    public static bool IsIfNotExistsSelectFromSysTablesWhereNameEqualCondition(this IList<TSqlParserToken> tokens, out string nameValue)
+    {
+        nameValue = string.Empty;
+        if (tokens == null) return false;
+        var tokenTypes = new List<TSqlTokenTypeItem>
+        {
+            new TSqlTokenTypeItem(TSqlTokenType.If),
+            new TSqlTokenTypeItem(TSqlTokenType.Not),
+            new TSqlTokenTypeItem(TSqlTokenType.Exists),
+            new TSqlTokenTypeItem(TSqlTokenType.LeftParenthesis),
+            new TSqlTokenTypeItem(TSqlTokenType.Select),
+            new TSqlTokenTypeItem(TSqlTokenType.From),
+            // match sys.tables (sys . tables)
+            new TSqlTokenTypeItem(new List<TSqlTokenType>{TSqlTokenType.Identifier, TSqlTokenType.QuotedIdentifier}, value: "sys"),
+            new TSqlTokenTypeItem(TSqlTokenType.Dot),
+            new TSqlTokenTypeItem(new List<TSqlTokenType>{TSqlTokenType.Identifier, TSqlTokenType.QuotedIdentifier}, value: "tables"),
+            new TSqlTokenTypeItem(TSqlTokenType.Where),
+            new TSqlTokenTypeItem(new List<TSqlTokenType>{TSqlTokenType.Identifier, TSqlTokenType.QuotedIdentifier}, value: "name"),
+            new TSqlTokenTypeItem(TSqlTokenType.EqualsSign),
+            new TSqlTokenTypeItem(new List<TSqlTokenType>{TSqlTokenType.AsciiStringLiteral, TSqlTokenType.UnicodeStringLiteral, TSqlTokenType.AsciiStringOrQuotedIdentifier}, action: TSqlTokenTypeAction.OutValue),
+            new TSqlTokenTypeItem(TSqlTokenType.RightParenthesis),
+        };
+
+        var matchResult = tokens.IsMatchTokenTypesSequence(tokenTypes);
+        if (matchResult.IsMatch && matchResult.OutValues.Count == 1)
+        {
+            nameValue = matchResult.OutValues[0].ToPostgreSqlIdentifier();
+            return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// 解析 IF NOT EXISTS(SELECT * FROM sys.indexes WHERE name = 'X') 这类语句，
+    /// 并输出 where 条件的 name 值（仅支持单一等值条件）
+    /// </summary>
+    /// <param name="tokens"></param>
+    /// <param name="indexName"></param>
+    /// <returns></returns>
+    public static bool IsIfNotExistsSelectFromSysIndexesWhereNameEqualCondition(this IList<TSqlParserToken> tokens, out string indexName)
+    {
+        indexName = string.Empty;
+        if (tokens == null) return false;
+        var tokenTypes = new List<TSqlTokenTypeItem>
+        {
+            new TSqlTokenTypeItem(TSqlTokenType.If),
+            new TSqlTokenTypeItem(TSqlTokenType.Not),
+            new TSqlTokenTypeItem(TSqlTokenType.Exists),
+            new TSqlTokenTypeItem(TSqlTokenType.LeftParenthesis),
+            new TSqlTokenTypeItem(TSqlTokenType.Select),
+            new TSqlTokenTypeItem(TSqlTokenType.From),
+            // match sys.indexes (sys . indexes)
+            new TSqlTokenTypeItem(new List<TSqlTokenType>{TSqlTokenType.Identifier, TSqlTokenType.QuotedIdentifier}, value: "sys"),
+            new TSqlTokenTypeItem(TSqlTokenType.Dot),
+            new TSqlTokenTypeItem(new List<TSqlTokenType>{TSqlTokenType.Identifier, TSqlTokenType.QuotedIdentifier}, value: "indexes"),
+            new TSqlTokenTypeItem(TSqlTokenType.Where),
+            new TSqlTokenTypeItem(new List<TSqlTokenType>{TSqlTokenType.Identifier, TSqlTokenType.QuotedIdentifier}, value: "name"),
+            new TSqlTokenTypeItem(TSqlTokenType.EqualsSign),
+            new TSqlTokenTypeItem(new List<TSqlTokenType>{TSqlTokenType.AsciiStringLiteral, TSqlTokenType.UnicodeStringLiteral, TSqlTokenType.AsciiStringOrQuotedIdentifier}, action: TSqlTokenTypeAction.OutValue),
+            new TSqlTokenTypeItem(TSqlTokenType.RightParenthesis),
+        };
+
+        var matchResult = tokens.IsMatchTokenTypesSequence(tokenTypes);
+        if (matchResult.IsMatch && matchResult.OutValues.Count == 1)
+        {
+            indexName = matchResult.OutValues[0].TrimQuotes();
+            return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// 解析 IF NOT EXISTS ... FROM helpFiles WHERE code='pms' 这类语句
+    /// 并提取表名、列名与值
+    /// </summary>
+    public static bool IsIfNotExistsSelectFromTableWhereColumnEqualValueCommon(this IList<TSqlParserToken> tokens, out string tableName, out Dictionary<string,string> columns)
+    {
+        tableName = string.Empty;
+        columns = new Dictionary<string, string>();
+        if (tokens == null) return false;
+
+        var tokenTypes = new List<TSqlTokenTypeItem>
+        {
+            new TSqlTokenTypeItem(TSqlTokenType.If),
+            new TSqlTokenTypeItem(TSqlTokenType.Not),
+            new TSqlTokenTypeItem(TSqlTokenType.Exists),
+            new TSqlTokenTypeItem(TSqlTokenType.LeftParenthesis),
+            new TSqlTokenTypeItem(TSqlTokenType.Select),
+            new TSqlTokenTypeItem(TSqlTokenType.From),
+            new TSqlTokenTypeItem(new List<TSqlTokenType>{TSqlTokenType.Identifier, TSqlTokenType.QuotedIdentifier}, action: TSqlTokenTypeAction.OutIdentifier),
+            new TSqlTokenTypeItem(TSqlTokenType.Where)
+        };
+
+        var matchResult = tokens.IsMatchTokenTypesSequence(tokenTypes);
+        if (!matchResult.IsMatch) return false;
+
+        tableName = matchResult.OutValues[0];
+        var indexForWhere = tokens.FindFirstIndex(w => w.TokenType == TSqlTokenType.Where, tokenTypes.Count);
+        indexForWhere++;
+        columns = GetWhereColumnNameAndColumnValues(tokens, ref indexForWhere);
+
+        return true;
     }
 }

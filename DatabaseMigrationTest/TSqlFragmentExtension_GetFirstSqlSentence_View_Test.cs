@@ -447,11 +447,33 @@ as";
         Assert.Equal(innerSqlsFirstTokens.Count + 37, innerStartIndex);
         Assert.Equal(47, innerStartIndex);
     }
+    /// <summary>
+    /// 测试语句：“alter table FaceDevices add BusinessPointCode varchar(30) null --人脸设备安装位置所属营业点代码”获取第一个完整SQL语句时，应包含注释部分
+    /// </summary>
+    [Fact]
+    public void GetFirstCompleteSqlFromAlertWithComment_Test()
+    {
+        var sql = @"alter table FaceDevices add BusinessPointCode varchar(30) null --人脸设备安装位置所属营业点代码";
+        var parser = new TSql170Parser(true);
+        var fragment = parser.Parse(new System.IO.StringReader(sql), out var errors);
+        Assert.Empty(errors);
+        int startIndex = 0;
+        var tokens = fragment.GetFirstCompleteSqlTokens(ref startIndex);
+        var expectedFirst = @"alter table FaceDevices add BusinessPointCode varchar(30) null";
+        Assert.Equal(expectedFirst, string.Concat(tokens.Select(w => w.Text)));
+        Assert.Equal(tokens.Count, startIndex);
+        Assert.Equal(16, startIndex);
+        //继续获取注释部分
+        var commentTokens = fragment.GetFirstCompleteSqlTokens(ref startIndex);
+        var expectedComment = @" --人脸设备安装位置所属营业点代码";
+        Assert.Equal(expectedComment, string.Concat(commentTokens.Select(w => w.Text)));
+        Assert.Equal(commentTokens.Count + 16, startIndex);
+    }
     #endregion
     [Fact]
     public void Test()
     {
-        var sql = @"  DELETE roleauth WHERE authcode NOT IN (SELECT authcode FROM authlist)  ";
+        var sql = @"alter table FaceDevices add BusinessPointCode varchar(30) null --人脸设备安装位置所属营业点代码";
         var parser = new TSql170Parser(true);
         var fragment = parser.Parse(new System.IO.StringReader(sql), out var errors);
 

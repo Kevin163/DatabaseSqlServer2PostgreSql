@@ -1,4 +1,5 @@
-﻿using DatabaseMigration.ScriptGenerator;
+﻿using DatabaseMigration.Migration;
+using DatabaseMigration.ScriptGenerator;
 using Microsoft.SqlServer.TransactSql.ScriptDom;
 
 namespace DatabaseMigrationTest;
@@ -115,5 +116,53 @@ end";
 
         Assert.Equal(expectedFirst, string.Concat(tokens.Select(w => w.Text)));
         Assert.Equal(tokens.Count, startIndex);
+    }
+
+    /// <summary>
+    /// 新增测试：识别 IF NOT EXISTS(SELECT * FROM helpFiles WHERE code = 'pms') BEGIN UPDATE helpFiles SET code='pms' ... END
+    /// 并提取出表名与 WHERE 中的 code 值
+    /// </summary>
+    [Fact]
+    public void IsIfNotExistsSelectFromTableWhereColumnEqualValueCommon_HelpFilesCodePms_ParsesCorrectly()
+    {
+        var sql = @"IF NOT EXISTS(SELECT * FROM helpFiles WHERE code = 'pms')
+BEGIN
+  UPDATE helpFiles SET code='pms' WHERE title LIKE'%客房%'
+END";
+
+        var parser = new TSql170Parser(true);
+        var fragment = parser.Parse(new System.IO.StringReader(sql), out var errors);
+
+        Assert.Empty(errors);
+
+        var ok = fragment.ScriptTokenStream.IsIfNotExistsSelectFromTableWhereColumnEqualValueCommon(out var tableName, out var columns);
+        Assert.True(ok);
+        Assert.False(string.IsNullOrEmpty(tableName));
+        Assert.Equal("helpFiles".ToLowerInvariant(), tableName.ToLowerInvariant());
+        Assert.True(columns.ContainsKey("code"));
+        Assert.Equal("pms", columns["code"]);
+    }
+    /// <summary>
+    /// 新增测试：识别 IF NOT EXISTS(SELECT * FROM helpFiles WHERE code = 'pms') BEGIN UPDATE helpFiles SET code='pms' ... END
+    /// 并提取出表名与 WHERE 中的 code 值
+    /// </summary>
+    [Fact]
+    public void IsIfNotExistsSelectFromTableWhereColumnEqualValueCommon_HelpFilesCodePms_ConvertCorrectly()
+    {
+        var sql = @"IF NOT EXISTS(SELECT * FROM helpFiles WHERE code = 'pms')
+BEGIN
+  UPDATE helpFiles SET code='pms' WHERE title LIKE'%客房%'
+END";
+
+        var frag = sql.ParseToFragment();
+        var generator = new PostgreSqlProcedureScriptGenerator();
+        var result = generator.GenerateSqlScript(frag.ScriptTokenStream);
+
+        var expected = @"IF NOT EXISTS ( SELECT 1 FROM helpfiles WHERE code = 'pms') THEN 
+
+  UPDATE helpfiles SET code='pms' WHERE title LIKE'%客房%';
+ END IF;
+";
+        Assert.Equal(expected, result);
     }
 }

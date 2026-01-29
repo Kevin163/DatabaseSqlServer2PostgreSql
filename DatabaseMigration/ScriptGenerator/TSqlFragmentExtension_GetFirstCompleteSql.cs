@@ -59,6 +59,14 @@ public static class TSqlFragmentExtension_GetFirstCompleteSql
         }
         var parser = new TSql170Parser(true);
         var newFragment = parser.Parse(new System.IO.StringReader(sqlToEnd), out var errors) as TSqlScript;
+
+        #region 处理没有任何语句块的情况，则全部作为一个语句返回
+        if (newFragment.Batches.Count == 0)
+        {
+            index = tokens.Count;
+            return tokensToEnd;
+        }
+        #endregion
         #region 处理整个语句是create...as ...类型的语句，则只返回create ... as
         //如果只有一条批量语句，并且开始位置的第一个是create，则表示可能是整个create语句，需要先取出create ...as这样的做为第一个完整的语句进行返回
         if (newFragment.Batches.Count == 1 && newFragment.ScriptTokenStream.Count > 0 && newFragment.ScriptTokenStream[0].TokenType == TSqlTokenType.Create)

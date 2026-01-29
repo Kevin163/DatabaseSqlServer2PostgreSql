@@ -106,6 +106,25 @@ end";
     }
 
     /// <summary>
+    /// 验证带方括号的列名以及 SELECT 1 形式也能被识别
+    /// </summary>
+    [Fact]
+    public void IsIfNotExistsFromSyscolumnsWhereIdAndName_BracketedNameAndSelect1()
+    {
+        var sql = "if(not exists(select 1 from syscolumns where id=object_id('helpFiles') and [name]='language'))  \nbegin  \n alter table helpFiles add [language] varchar(10) null  \nend ";
+
+        var parser = new TSql170Parser(true);
+        var fragment = parser.Parse(new System.IO.StringReader(sql), out var errors);
+
+        Assert.Empty(errors);
+
+        var isMatch = fragment.ScriptTokenStream.IsIfNotExistsFromSyscolumnsWhereIdAndName(out var table, out var column);
+        Assert.True(isMatch);
+        Assert.Equal("helpfiles", table);
+        Assert.Equal("language", column);
+    }
+
+    /// <summary>
     /// 验证 GetInnerSqls 的行为：
     ///1) 当 SQL 被最外层的 BEGIN/END 包裹（且之后没有其它有效代码）时，返回剥离后的内部语句；
     ///2) 当 SQL 无最外层 BEGIN/END 包裹时，直接返回原始 SQL。
@@ -375,7 +394,7 @@ END";
         var ok1 = fragment1.ScriptTokenStream.IsIfNotExistsSysobjectsNameEqualNestedIndexSelect(out var table1, out var index1);
         Assert.True(ok1);
         Assert.Equal("possmmappinghid", table1);
-        Assert.Equal("pk_possm_20190808912", index1);
+        Assert.Equal("PK_posSm_20190808912", index1);
 
         //变体：多余空格与 N 前缀（对索引名），并带分号
         var s2 = " IF NOT EXISTS(SELECT * FROM sysobjects WHERE name = (SELECT TOP1 name FROM sys.indexes WHERE is_primary_key=1 AND object_id=OBJECT_ID('dbo.posSmMappingHid') AND name = N'PK_posSm_20190808912')) select 1;";
@@ -385,7 +404,7 @@ END";
         var ok2 = fragment2.ScriptTokenStream.IsIfNotExistsSysobjectsNameEqualNestedIndexSelect(out var table2, out var index2);
         Assert.True(ok2);
         Assert.Equal("possmmappinghid", table2);
-        Assert.Equal("pk_possm_20190808912", index2);
+        Assert.Equal("PK_posSm_20190808912", index2);
     }
 
     /// <summary>
@@ -684,12 +703,12 @@ END";
             new TSqlTokenTypeItem(TSqlTokenType.RightParenthesis),
         };
 
-        var ok = tokens.IsMatchTokenTypesSequence(tokenTypes, out var outValues);
-        Assert.True(ok);
+        var matchResult = tokens.IsMatchTokenTypesSequence(tokenTypes);
+        Assert.True(matchResult.IsMatch);
         // Expect two out values: the table and the column string literals
-        Assert.Equal(2, outValues.Count);
-        Assert.Equal("'HotelPos'", outValues[0]);
-        Assert.Equal("'Id'", outValues[1]);
+        Assert.Equal(2, matchResult.OutValues.Count);
+        Assert.Equal("'HotelPos'", matchResult.OutValues[0]);
+        Assert.Equal("'Id'", matchResult.OutValues[1]);
     }
 
     [Fact]
@@ -735,8 +754,8 @@ END";
             new TSqlTokenTypeItem(TSqlTokenType.RightParenthesis),
         };
 
-        var ok = tokens.IsMatchTokenTypesSequence(tokenTypes, out var outValues);
-        Assert.False(ok);
+        var matchResult = tokens.IsMatchTokenTypesSequence(tokenTypes);
+        Assert.False(matchResult.IsMatch);
     }
 
     [Fact]
@@ -758,5 +777,114 @@ END";
         Assert.True(ok);
         Assert.Equal("hotelpos", table);
         Assert.Equal("id", column);
+    }
+    
+    [Fact]
+    public void IsIfNotExistsFromSyscolumnsWhereIdAndName_TokenExtension_AlterTable()
+    {
+        var sql = @"IF NOT EXISTS(SELECT * FROM syscolumns WHERE id=OBJECT_ID('helpFiles') AND name='showStatus')  
+BEGIN  
+ alter table dbo.helpFiles add showStatus bit null
+  exec('update helpFiles set showStatus=checkStatus where 1=1');
+  alter table dbo.helpFiles alter column showStatus bit not null;  
+end ";
+        var expected = @"IF NOT EXISTS ( SELECT 1 FROM information_schema.columns WHERE table_name = 'helpfiles' AND column_name = 'showstatus') THEN 
+  
+ ALTER TABLE helpfiles ADD showstatus boolean;
+  EXECUTE $exec$update helpfiles set showstatus=checkstatus where 1=1;$exec$;
+  ALTER TABLE helpfiles alter column showstatus type boolean, alter column showstatus set not null;
+ END IF;
+";
+
+        var fragment = sql.ParseToFragment();
+        var generator = new PostgreSqlProcedureScriptGenerator();
+        var actual = generator.GenerateSqlScript(fragment);
+
+        Assert.Equal(expected, actual);
+    }
+
+
+    [Fact]
+    public void IsIfNotExistsFromSyscolumnsWhereIdAndName_TokenExtension_CreateTableQuoted()
+    {
+        var sql = @"if object_id('helpFilesNotPass') is null  
+begin  
+ create table [dbo].[helpFilesNotPass](  
+  [id] [int] primary key identity(1,1) not null,  
+    [rId] [int] null,  
+  [title] [varchar](500) not null,  
+  [addUser] [varchar](50) not null,  
+  [addDate] [datetime] not null,  
+  [updateUser] [varchar](50) null,  
+  [updateDate] [datetime] not null,  
+  [checkStatus] [bit] not null,  
+  [checkUser] [varchar](50) null,  
+  [checkDate] [datetime] null,  
+  [readNumber] [int] not null,  
+  [menuId] [varchar](1000) not null,  
+  [menuName] [varchar](1000) not null,  
+  [content] [text] null,  
+  [code] [varchar](100) null,  
+  [language] [varchar](10) null,  
+    [showStatus] [bit] not null,  
+ );  
+end";
+        var expected = @"IF to_regclass('helpfilesnotpass') IS NULL THEN 
+  
+ CREATE TABLE helpfilesnotpass (
+        id serial NOT NULL PRIMARY KEY,
+        rid integer NULL,
+        title varchar(500) NOT NULL,
+        adduser varchar(50) NOT NULL,
+        adddate timestamp NOT NULL,
+        updateuser varchar(50) NULL,
+        updatedate timestamp NOT NULL,
+        checkstatus boolean NOT NULL,
+        checkuser varchar(50) NULL,
+        checkdate timestamp NULL,
+        readnumber integer NOT NULL,
+        menuid varchar(1000) NOT NULL,
+        menuname varchar(1000) NOT NULL,
+        content text NULL,
+        code varchar(100) NULL,
+        language varchar(10) NULL,
+        showstatus boolean NOT NULL
+);
+ END IF;
+";
+
+        var fragment = sql.ParseToFragment();
+        var generator = new PostgreSqlProcedureScriptGenerator();
+        var actual = generator.GenerateSqlScript(fragment);
+
+        Assert.Equal(expected, actual);
+    }
+
+    /// <summary>
+    /// 新增单元测试：验证将包含动态 exec 的 IF NOT EXISTS 添加列语句正确转换为 PostgreSQL
+    /// </summary>
+    [Fact]
+    public void Convert_IfNotExists_AddCDate_WithDynamicExec_ConvertsToPostgres()
+    {
+        var sql = @"IF NOT EXISTS(SELECT * FROM syscolumns WHERE id=OBJECT_ID('hotelProducts') AND name = 'cDate')  
+BEGIN  
+  ALTER TABLE hotelProducts ADD cDate datetime default getdate()
+  declare @sql varchar(1000) = 'UPDATE hp SET hp.cDate = h.createDate FROM dbo.hotelProducts hp INNER JOIN dbo.hotel h ON h.hid = hp.hid and h.createDate is not null WHERE hp.cDate IS NULL'
+  exec(@sql)  
+END";
+
+        var fragment = sql.ParseToFragment();
+        var generator = new PostgreSqlProcedureScriptGenerator();
+        var actual = generator.GenerateSqlScript(fragment);
+
+        var expected = @"IF NOT EXISTS ( SELECT 1 FROM information_schema.columns WHERE table_name = 'hotelproducts' AND column_name = 'cdate') THEN 
+  
+  ALTER TABLE hotelproducts ADD cdate timestamp DEFAULT CURRENT_TIMESTAMP;
+  sql = 'UPDATE hp SET hp.cdate = h.createdate FROM hotelproducts hp INNER JOIN hotel h ON h.hid = hp.hid and h.createdate is not null WHERE hp.cdate IS NULL;';
+  EXECUTE sql;
+ END IF;
+";
+
+        Assert.Equal(expected, actual);
     }
 }

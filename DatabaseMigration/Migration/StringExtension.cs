@@ -55,23 +55,54 @@ public static class StringExtension
     public static string ToPostgreSqlIdentifier(this string input)
     {
         if (string.IsNullOrEmpty(input)) return input;
-        var name = input.ToLower()
+        var name = input
+            .Trim()
+            .ToLower()
             .Replace("dbo.", "")
+            .Replace("[dbo].","")
+            .TrimQuotes();
+        return name;
+    }
+    /// <summary>
+    /// 转换为PostgreSQL的变量名格式。Sqlserver的变量名前有@符号，PostgreSQL没有。
+    /// </summary>
+    /// <param name="input"></param>
+    /// <returns></returns>
+    public static string ToPostgreVariableName(this string input)
+    {
+        if (string.IsNullOrEmpty(input)) return input;
+        var name = input
+            .Trim()
+            .ToLower()
+            .Replace("@", "")
             .TrimQuotes();
         return name;
     }
     /// <summary>
     /// 去除字符串两端的各种引号字符，包括方括号、中英文单引号和双引号。
+    /// 注意：不能直接使用trim，因为trim会去除所有的引号字符，而不是成对去除。比如'update FaceDevices set DeviceType = ''人脸'''会被错误处理为update FaceDevices set DeviceType = ''人脸
     /// </summary>
     /// <param name="input"></param>
     /// <returns></returns>
     public static string TrimQuotes(this string input)
     {
         if (string.IsNullOrEmpty(input)) return input;
-        var name = input.Trim('[', ']', '\'', '"');
-        if (name.StartsWith("n'",StringComparison.OrdinalIgnoreCase))
+        var name = input.Trim();
+        if (name.StartsWith("n'",StringComparison.OrdinalIgnoreCase) && name.EndsWith("'"))
         {
-            name = name[2..];
+            name = name[2..^1];
+        }
+        if(name.StartsWith('[') && name.EndsWith(']'))
+        {
+            name = name[1..^1];
+        }
+        if(name.StartsWith('\'') && name.EndsWith('\''))
+        {
+            name = name[1..^1];
+        }
+        if(name.StartsWith('"') && name.EndsWith('"'))
+        {
+            name = name[1..^1];
         }
         return name;
     }
@@ -88,7 +119,7 @@ public static class StringExtension
         var frag = parser.Parse(rdr, out var errors);
         if (errors != null && errors.Count > 0)
         {
-            throw new System.Exception("Parse errors: " + string.Join(";", errors));
+            throw new System.Exception($"Parse sql ({sql}) errors: " + string.Join(";", errors));
         }
         return frag;
     }

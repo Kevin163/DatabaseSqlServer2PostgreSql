@@ -61,7 +61,10 @@ END";
         var converter = new PostgreSqlProcedureScriptGenerator();
         var result = converter.GenerateSqlScript(fragment);
 
-        var expected = @"  
+        var expected = @"CREATE OR REPLACE procedure a_update_sys  () 
+LANGUAGE plpgsql
+as $$
+  
 /****************************************************************************  
 作者：陈提见  
 日期：2016-05-7  
@@ -104,7 +107,8 @@ IF NOT EXISTS ( SELECT 1 FROM information_schema.columns WHERE table_name = 'dbl
     ALTER TABLE dblist ADD readonlylogid varchar(30);  
     ALTER TABLE dblist ADD readonlylogpwd varchar(30);
  END IF;
-";
+
+$$;";
         Assert.Equal(expected, result);
     }
     [Fact]
