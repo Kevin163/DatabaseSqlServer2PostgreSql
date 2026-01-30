@@ -279,23 +279,43 @@ public static class ListTSqlParserTokenExtension
                     }
                     if (k < tokens.Count)
                     {
-                        defaultValueSb.Append(tokens[k].Text);
-                        //判断下一个是否是左括号，如果是的话，则继续取出，直到找到对应的右括号
-                        if(k+1<tokens.Count && tokens[k+1].TokenType == TSqlTokenType.LeftParenthesis)
+                        // 检查是否是 DEFAULT(0) 这种格式（左括号紧跟在DEFAULT后面或只有空格）
+                        if(tokens[k].TokenType == TSqlTokenType.LeftParenthesis)
                         {
-                            k++;
+                            k++; // 跳过左括号
                             while (k < tokens.Count)
                             {
-                                defaultValueSb.Append(tokens[k].Text);
+                                // 遇到右括号时停止，不添加右括号
                                 if (tokens[k].TokenType == TSqlTokenType.RightParenthesis)
                                 {
                                     break;
                                 }
+                                defaultValueSb.Append(tokens[k].Text);
                                 k++;
                             }
+                            dataTypeDefine.DefaultValue = MigrationUtils.ConvertToPostgresFunction(defaultValueSb.ToString());
+                        }
+                        else
+                        {
+                            // 正常格式：DEFAULT 0 或 DEFAULT 'value'
+                            defaultValueSb.Append(tokens[k].Text);
+                            //判断下一个是否是左括号，如果是的话，则继续取出，直到找到对应的右括号
+                            if(k+1<tokens.Count && tokens[k+1].TokenType == TSqlTokenType.LeftParenthesis)
+                            {
+                                k++;
+                                while (k < tokens.Count)
+                                {
+                                    defaultValueSb.Append(tokens[k].Text);
+                                    if (tokens[k].TokenType == TSqlTokenType.RightParenthesis)
+                                    {
+                                        break;
+                                    }
+                                    k++;
+                                }
+                            }
+                            dataTypeDefine.DefaultValue = MigrationUtils.ConvertToPostgresFunction(defaultValueSb.ToString());
                         }
                     }
-                    dataTypeDefine.DefaultValue = MigrationUtils.ConvertToPostgresFunction(defaultValueSb.ToString());
                 }
                 k++;
             }

@@ -9,7 +9,7 @@ public class TSqlFragmentExtension_CreateProcedure_Test
     public void ConvertProcedureToPostgreSql_ComplexSelectView_ReturnsConvertedSql()
     {
         var sql = @"CREATE procedure [dbo].[a_update_Sys]  
-as  
+as
 /****************************************************************************  
 作者：陈提见  
 日期：2016-05-7  
@@ -64,7 +64,7 @@ END";
         var expected = @"CREATE OR REPLACE procedure a_update_sys  () 
 LANGUAGE plpgsql
 as $$
-  
+
 /****************************************************************************  
 作者：陈提见  
 日期：2016-05-7  

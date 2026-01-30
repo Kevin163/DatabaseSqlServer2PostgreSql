@@ -43,8 +43,22 @@ public struct ColumnDataTypeDefineItem
     /// 是否为自增列
     /// </summary>
     public bool IsIdentity { get; set; }
+    private string? _defaultValue;
+
     /// <summary>
     /// 列的默认值，没有默认值则为 null
     /// </summary>
-    public string? DefaultValue { get; set; }
+    public string? DefaultValue
+    {
+        get => _defaultValue;
+        set
+        {
+            //如果当前类型是boolean类型，则需要转换为postgresql的true/false
+            if (DataType == "boolean")
+            {
+                value = value == "1" ? "true" : "false";
+            }
+            _defaultValue = value;
+        }
+    }
 }

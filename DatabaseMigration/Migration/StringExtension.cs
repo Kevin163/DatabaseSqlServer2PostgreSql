@@ -49,6 +49,11 @@ public static class StringExtension
     }
     /// <summary>
     /// 将输入字符串转换为PostgreSQL的标识符格式。
+    /// 处理以下转换：
+    /// 1. 去除架构前缀（如 dbo.）
+    /// 2. 去除临时表前缀（如 #temp -> temp）
+    /// 3. 转换为小写
+    /// 4. 去除引号
     /// </summary>
     /// <param name="input"></param>
     /// <returns></returns>
@@ -61,6 +66,12 @@ public static class StringExtension
             .Replace("dbo.", "")
             .Replace("[dbo].","")
             .TrimQuotes();
+        // 处理临时表：SQL Server 使用 #temp 表示局部临时表，##temp 表示全局临时表
+        // PostgreSQL 使用 CREATE TEMP TABLE 语法，最简单的迁移方式是去掉 # 前缀
+        if (name.StartsWith("#"))
+        {
+            name = name.TrimStart('#');
+        }
         return name;
     }
     /// <summary>

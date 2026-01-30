@@ -61,11 +61,19 @@ public class PostgreSqlProcedureScriptGenerator : PostgreSqlScriptGenerator
                 //如果没有参数，则补上空括号
                 if (!hasLeftParenthesis)
                 {
-                    sb.Append("() ");
+                    //保持()和存储过程名称在同一行，所以如果当前sb最后一个字符是换行符，则需要去掉
+                    if(sb[sb.Length - 1] == '\n')
+                    {
+                        sb.Length -= 1;
+                    }
+                    else if (sb[sb.Length - 2] == '\r' && sb[sb.Length - 1] == '\n')
+                    {
+                        sb.Length -= 2;
+                    }
+                    sb.AppendLine("() ");
                 }
                 //补充上语言标识
-                sb.AppendLine()
-                    .AppendLine("LANGUAGE plpgsql");
+                sb.AppendLine("LANGUAGE plpgsql");
             }
             sb.Append(item.Text);
         }

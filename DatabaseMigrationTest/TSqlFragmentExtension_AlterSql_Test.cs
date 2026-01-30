@@ -220,4 +220,46 @@ END";
         Assert.Equal("varchar(2)", columnItems[0].DataTypeDefine.DataType);
         Assert.False(columnItems[0].DataTypeDefine.IsNullable);
     }
+
+    [Fact]
+    public void GenerateSqlScript_PostgreProcedure_IfNotExists_AddBitColumnWithDefaultZero_MigratedToPostgres()
+    {
+        var sql = @"IF NOT EXISTS(SELECT * FROM syscolumns WHERE id = OBJECT_ID('dbList') AND name = 'isDefalut')
+BEGIN
+  ALTER TABLE dbo.dbList
+ADD isDefalut BIT NOT NULL DEFAULT(0)
+END";
+
+        var parser = new TSql170Parser(true);
+        var fragment = parser.Parse(new System.IO.StringReader(sql), out var errors);
+        Assert.Empty(errors);
+
+        var generator = new PostgreSqlProcedureScriptGenerator();
+        var migrated = generator.GenerateSqlScript(fragment);
+
+        var expected = @"IF NOT EXISTS ( SELECT 1 FROM information_schema.columns WHERE table_name = 'dblist' AND column_name = 'isdefalut') THEN 
+
+  ALTER TABLE dblist ADD isdefalut boolean not null DEFAULT false;
+ END IF;
+";
+
+        Assert.Equal(expected, migrated);
+    }
+
+    [Fact]
+    public void IsAlterTableAddColumn_BitWithDefaultZeroInParentheses_DefaultParsed()
+    {
+        var sql = "ALTER TABLE dbo.dbList ADD isDefalut BIT NOT NULL DEFAULT(0)";
+        var parser = new TSql170Parser(true);
+        var fragment = parser.Parse(new System.IO.StringReader(sql), out var errors);
+        Assert.Empty(errors);
+
+        var ok = TSqlFragmentExtension_AlterSql.IsAlterTableAddColumn(fragment.ScriptTokenStream, out var table, out var columnItems);
+        Assert.True(ok);
+        Assert.Equal("dblist", table);
+        Assert.Equal("isdefalut", columnItems[0].Name);
+        Assert.Equal("boolean", columnItems[0].DataTypeDefine.DataType);
+        Assert.False(columnItems[0].DataTypeDefine.IsNullable);
+        Assert.Equal("false", columnItems[0].DataTypeDefine.DefaultValue); // 应该提取到默认值 0，并且转换为false
+    }
 }

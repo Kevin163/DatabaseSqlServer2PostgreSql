@@ -67,6 +67,11 @@ public abstract class PostgreSqlScriptGenerator
         {
             return ConvertDeleteSql(sqlTokens);
         }
+        //处理drop语句
+        if (sqlTokenType == TSqlTokenType.Drop)
+        {
+            return ConvertDropSql(sqlTokens);
+        }
         //处理begin范围语句
         if (sqlTokenType == TSqlTokenType.Begin || sqlTokenType == TSqlTokenType.End)
         {
@@ -533,6 +538,49 @@ public abstract class PostgreSqlScriptGenerator
                 sql.Append(sqlTokens.GetDateAddSql(ref i));
                 continue;
             }
+            //处理临时表（以 # 开头的标识符）
+            if (item.TokenType == TSqlTokenType.Identifier && item.Text.StartsWith("#"))
+            {
+                sql.Append(item.Text.ToPostgreSqlIdentifier());
+                continue;
+            }
+            //处理引号标识符（可能是 dbo.table 格式）
+            if (item.TokenType == TSqlTokenType.AsciiStringOrQuotedIdentifier || item.TokenType == TSqlTokenType.QuotedIdentifier)
+            {
+                sql.Append(item.Text.ToPostgreSqlIdentifier());
+                continue;
+            }
+            sql.Append(item.Text);
+        }
+        sql.AppendIfMissing(';');
+        return sql.ToString();
+    }
+    #endregion
+
+    #region 转换Drop语句
+    /// <summary>
+    /// 转换DROP语句，处理标识符转换（包括临时表）
+    /// </summary>
+    /// <param name="sqlTokens"></param>
+    /// <returns></returns>
+    protected virtual string ConvertDropSql(IList<TSqlParserToken> sqlTokens)
+    {
+        var sql = new StringBuilder();
+        for (var i = 0; i < sqlTokens.Count; i++)
+        {
+            var item = sqlTokens[i];
+            //处理临时表（以 # 开头的标识符）
+            if (item.TokenType == TSqlTokenType.Identifier && item.Text.StartsWith("#"))
+            {
+                sql.Append(item.Text.ToPostgreSqlIdentifier());
+                continue;
+            }
+            //处理引号标识符
+            if (item.TokenType == TSqlTokenType.AsciiStringOrQuotedIdentifier || item.TokenType == TSqlTokenType.QuotedIdentifier)
+            {
+                sql.Append(item.Text.ToPostgreSqlIdentifier());
+                continue;
+            }
             sql.Append(item.Text);
         }
         sql.AppendIfMissing(';');
@@ -591,6 +639,23 @@ public abstract class PostgreSqlScriptGenerator
     protected virtual string ConvertSelectSql(IList<TSqlParserToken> tokens)
     {
         var sb = new StringBuilder();
+
+        // 检查是否有 INTO 子句（SELECT ... INTO table FROM ...）
+        // 这种语法在 SQL Server 中创建表，在 PostgreSQL 中需要转换为 CREATE TEMP TABLE ... AS SELECT ...
+        var intoIndex = -1;
+        for (var i = 0; i < tokens.Count; i++)
+        {
+            if (tokens[i].TokenType == TSqlTokenType.Into)
+            {
+                intoIndex = i;
+                break;
+            }
+        }
+        if (intoIndex > 0)
+        {
+            return ConvertSelectIntoSql(tokens, intoIndex);
+        }
+
         //完整的selct语句包含select,from,where等，而只有select部分中的name='value',name = a.columnName等需要处理,而from ,where等不需要处理
         var isInSelect = false;
         for (var i = 0; i < tokens.Count; i++)
@@ -648,6 +713,14 @@ public abstract class PostgreSqlScriptGenerator
                 //同时需要妆容colName = a.columnName这样的形式
                 var nextTokens = tokens.Skip(i + 1).ToList();
                 var nextTokenType = nextTokens.GetFirstNotWhiteSpaceTokenType();
+
+                // 判断是否是 ISNULL 函数，需要转换为 coalesce
+                if (item.Text.Equals("isnull", StringComparison.OrdinalIgnoreCase) && nextTokenType == TSqlTokenType.LeftParenthesis)
+                {
+                    sb.Append("coalesce");
+                    continue;
+                }
+
                 if (nextTokenType == TSqlTokenType.EqualsSign && isInSelect)
                 {
                     var valueTokenIndex = nextTokens.FindIndex(w => w.TokenType != TSqlTokenType.WhiteSpace && w.TokenType != TSqlTokenType.EqualsSign);
@@ -685,6 +758,160 @@ public abstract class PostgreSqlScriptGenerator
         }
         return sb.ToString();
     }
+
+    /// <summary>
+    /// 处理 SELECT ... INTO table 语句，转换为 CREATE TEMP TABLE ... AS SELECT ...
+    /// </summary>
+    /// <param name="tokens">原始 tokens</param>
+    /// <param name="intoIndex">INTO 关键字的索引</param>
+    /// <returns>转换后的 SQL</returns>
+    protected virtual string ConvertSelectIntoSql(IList<TSqlParserToken> tokens, int intoIndex)
+    {
+        var sb = new StringBuilder();
+
+        // 1. 首先查找表名
+        var tableNameIndex = -1;
+        for (var i = intoIndex + 1; i < tokens.Count; i++)
+        {
+            if (tokens[i].TokenType == TSqlTokenType.Identifier || tokens[i].TokenType == TSqlTokenType.QuotedIdentifier)
+            {
+                tableNameIndex = i;
+                break;
+            }
+        }
+
+        if (tableNameIndex < 0)
+        {
+            // 如果找不到表名，返回空字符串
+            return string.Empty;
+        }
+
+        var tableName = tokens[tableNameIndex].Text.ToPostgreSqlIdentifier();
+
+        // 2. 添加 DROP TABLE IF EXISTS（避免重复创建错误）
+        sb.AppendLine($"DROP TABLE IF EXISTS {tableName};");
+
+        // 3. 添加 CREATE TEMP TABLE
+        sb.Append("CREATE TEMP TABLE ");
+        sb.Append(tableName);
+
+        // 4. 添加 AS
+        sb.Append(" AS ");
+
+        // 5. 添加 SELECT 部分（从开始到 INTO 之前）
+        for (var i = 0; i < intoIndex; i++)
+        {
+            var item = tokens[i];
+
+            #region 处理dbo.xxx,直接跳过dbo.,从xxx开始继续转换
+            if ((item.TokenType == TSqlTokenType.Identifier || item.TokenType == TSqlTokenType.QuotedIdentifier)
+                && item.Text.Equals("dbo", StringComparison.OrdinalIgnoreCase)
+                 && tokens[i + 1].TokenType == TSqlTokenType.Dot)
+            {
+                i += 2;
+                item = tokens[i];
+            }
+            #endregion
+
+            #region 处理所有Identifier,都更改为小写
+            if (item.TokenType == TSqlTokenType.Identifier || item.TokenType == TSqlTokenType.QuotedIdentifier)
+            {
+                var nextTokens = tokens.Skip(i + 1).Take(intoIndex - i - 1).ToList();
+                var nextTokenType = nextTokens.GetFirstNotWhiteSpaceTokenType();
+                if (nextTokenType == TSqlTokenType.EqualsSign)
+                {
+                    var valueTokenIndex = nextTokens.FindIndex(w => w.TokenType != TSqlTokenType.WhiteSpace && w.TokenType != TSqlTokenType.EqualsSign);
+                    if (valueTokenIndex + 1 < nextTokens.Count && nextTokens[valueTokenIndex + 1].TokenType == TSqlTokenType.Dot)
+                    {
+                        sb.Append($"{nextTokens[valueTokenIndex].Text}{nextTokens[valueTokenIndex + 1].Text}{nextTokens[valueTokenIndex + 2].Text} AS {item.Text.ToPostgreSqlIdentifier()}");
+                        i += valueTokenIndex + 3;
+                        continue;
+                    }
+                    else
+                    {
+                        sb.Append($"{nextTokens[valueTokenIndex].Text} AS {item.Text.ToPostgreSqlIdentifier()}");
+                        i += valueTokenIndex + 1;
+                        continue;
+                    }
+                }
+                else
+                {
+                    sb.Append(item.Text.ToPostgreSqlIdentifier());
+                    continue;
+                }
+            }
+            #endregion
+
+            #region 处理convert函数
+            if (item.TokenType == TSqlTokenType.Convert)
+            {
+                var tempIndex = i;
+                sb.Append(tokens.GetConvertSql(ref tempIndex));
+                i = tempIndex;
+                continue;
+            }
+            #endregion
+
+            sb.Append(item.Text);
+        }
+
+        // 6. 添加 FROM 及之后的子句（跳过 INTO 和表名）
+        var fromIndex = -1;
+        for (var i = intoIndex; i < tokens.Count; i++)
+        {
+            if (tokens[i].TokenType == TSqlTokenType.From)
+            {
+                fromIndex = i;
+                break;
+            }
+        }
+        if (fromIndex > 0)
+        {
+            for (var i = fromIndex; i < tokens.Count; i++)
+            {
+                var item = tokens[i];
+
+                #region 处理dbo.xxx,直接跳过dbo.
+                if ((item.TokenType == TSqlTokenType.Identifier || item.TokenType == TSqlTokenType.QuotedIdentifier)
+                    && item.Text.Equals("dbo", StringComparison.OrdinalIgnoreCase)
+                     && i + 1 < tokens.Count && tokens[i + 1].TokenType == TSqlTokenType.Dot)
+                {
+                    i += 2;
+                    if (i < tokens.Count)
+                    {
+                        item = tokens[i];
+                        sb.Append(item.Text.ToPostgreSqlIdentifier());
+                    }
+                    continue;
+                }
+                #endregion
+
+                #region 处理标识符
+                if (item.TokenType == TSqlTokenType.Identifier || item.TokenType == TSqlTokenType.QuotedIdentifier)
+                {
+                    // 判断是否是 ISNULL 函数，需要转换为 coalesce
+                    if (item.Text.Equals("isnull", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var nextTokens = tokens.Skip(i + 1).ToList();
+                        var nextTokenType = nextTokens.GetFirstNotWhiteSpaceTokenType();
+                        if (nextTokenType == TSqlTokenType.LeftParenthesis)
+                        {
+                            sb.Append("coalesce");
+                            continue;
+                        }
+                    }
+                    sb.Append(item.Text.ToPostgreSqlIdentifier());
+                    continue;
+                }
+                #endregion
+
+                sb.Append(item.Text);
+            }
+        }
+
+        sb.Append(";");
+        return sb.ToString();
+    }
     #endregion
 
     #region 转换insert 语句
@@ -703,6 +930,12 @@ public abstract class PostgreSqlScriptGenerator
             if (item.TokenType == TSqlTokenType.AsciiStringOrQuotedIdentifier || item.TokenType == TSqlTokenType.QuotedIdentifier)
             {
                 sb.Append(tokens.GetIdentityName(ref i));
+                continue;
+            }
+            //处理临时表（以 # 开头的标识符）
+            if (item.TokenType == TSqlTokenType.Identifier && item.Text.StartsWith("#"))
+            {
+                sb.Append(item.Text.ToPostgreSqlIdentifier());
                 continue;
             }
             sb.Append(item.Text);
