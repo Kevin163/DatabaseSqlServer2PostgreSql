@@ -330,7 +330,7 @@ public static class ListTSqlParserTokenExtension
     /// <param name="tokens"></param>
     /// <param name="i"></param>
     /// <returns></returns>
-    public static string GetConvertSql(this IList<TSqlParserToken> tokens, ref int i)
+    public static string GetConvertSql(this IList<TSqlParserToken> tokens, ref int i,PostgreSqlScriptGenerator postgreSqlScriptGenerator)
     {
         if (tokens == null || i < 0 || i >= tokens.Count) return string.Empty;
 
@@ -431,7 +431,34 @@ public static class ListTSqlParserTokenExtension
             }
             if (ok) exprStr = exprStr.Substring(1, exprStr.Length - 2).Trim();
         }
-
+        // 如果表达式是带+号的复杂表达式，则在前面加上select，做为一个完整的语句进行替换，替换完成后再去掉select
+        if (exprStr.Contains("+"))
+        {
+            var sqlExprStr = $"SELECT {exprStr}";
+            try
+            {
+                var sqlExprTokens = sqlExprStr.ParseToFragment().ScriptTokenStream;
+                var sqlExprConverted = postgreSqlScriptGenerator.GenerateSqlScript(sqlExprTokens, needAddSqlContentBeforeEndFile: false);
+                // 去掉select
+                if (sqlExprConverted.StartsWith("SELECT ", StringComparison.OrdinalIgnoreCase))
+                {
+                    exprStr = sqlExprConverted.Substring(7).Trim();
+                }
+                else
+                {
+                    exprStr = sqlExprConverted;
+                }
+                //去年掉末尾的分号
+                if (exprStr.EndsWith(";"))
+                {
+                    exprStr = exprStr.Substring(0, exprStr.Length - 1).Trim();
+                }
+            }
+            catch
+            {
+                // ignore parse error, keep original
+            }
+        }
         // Construct CAST(expression AS type)
         var result = new StringBuilder();
         result.Append("CAST(");

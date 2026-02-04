@@ -13,8 +13,8 @@ public static class TSqlFragmentExtension_ConvertFunction
     /// <param name="fragment"></param>
     /// <param name="i"></param>
     /// <returns></returns>
-    public static string GetConvertSql(this TSqlFragment fragment, ref int i)
+    public static string GetConvertSql(this TSqlFragment fragment, ref int i,PostgreSqlScriptGenerator postgreSqlScriptGenerator)
     {
-        return fragment.ScriptTokenStream.GetConvertSql(ref i);
+        return fragment.ScriptTokenStream.GetConvertSql(ref i, postgreSqlScriptGenerator);
     }
 }

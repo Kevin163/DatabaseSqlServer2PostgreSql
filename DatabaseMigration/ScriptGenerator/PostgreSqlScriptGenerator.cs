@@ -19,11 +19,14 @@ public abstract class PostgreSqlScriptGenerator
         return GenerateSqlScript(fragment.ScriptTokenStream);
     }
     #region 转换单个或多个语句入口
-    public virtual string GenerateSqlScript(IList<TSqlParserToken> sqlTokens)
+    public virtual string GenerateSqlScript(IList<TSqlParserToken> sqlTokens,bool needAddSqlContentBeforeEndFile = true)
     {
         var sb = new StringBuilder();
         sb.Append(ConvertAllSqlAndSqlBatch(sqlTokens));
-        sb.Append(GetSqlContentBeforeEndFile());
+        if (needAddSqlContentBeforeEndFile)
+        {
+            sb.Append(GetSqlContentBeforeEndFile());
+        }
         return sb.ToString();
     }
     #endregion
@@ -748,14 +751,37 @@ public abstract class PostgreSqlScriptGenerator
             //处理类似convert(varchar(30) , 'gs') 的语句，转换为 CAST('gs' AS varchar(30))
             if (item.TokenType == TSqlTokenType.Convert)
             {
-                sb.Append(tokens.GetConvertSql(ref i));
+                sb.Append(tokens.GetConvertSql(ref i, this));
                 continue;
             }
             #endregion
+            #region 处理+号的情况，只有前后是字符串时才转换为||，否则保留+
+            if (item.TokenType == TSqlTokenType.Plus)
+            {
+                // 跳过前面的空白
+                int prevIdx = i - 1;
+                while (prevIdx >= 0 && tokens[prevIdx].TokenType == TSqlTokenType.WhiteSpace) prevIdx--;
+                var prev = prevIdx >= 0 ? tokens[prevIdx] : null;
 
+                // 跳过后面的空白
+                int nextIdx = i + 1;
+                while (nextIdx < tokens.Count && tokens[nextIdx].TokenType == TSqlTokenType.WhiteSpace) nextIdx++;
+                var next = nextIdx < tokens.Count ? tokens[nextIdx] : null;
+
+                bool prevIsString = prev != null && (prev.TokenType == TSqlTokenType.AsciiStringLiteral);
+                bool nextIsString = next != null && (next.TokenType == TSqlTokenType.AsciiStringLiteral);
+
+                if (prevIsString || nextIsString)
+                    sb.Append("||");
+                else
+                    sb.Append("+");
+                continue;
+            }
+            #endregion
             //非特殊类型的，直接添加
             sb.Append(item.Text);
         }
+        sb.AppendIfMissing(';');
         return sb.ToString();
     }
 
@@ -846,7 +872,7 @@ public abstract class PostgreSqlScriptGenerator
             if (item.TokenType == TSqlTokenType.Convert)
             {
                 var tempIndex = i;
-                sb.Append(tokens.GetConvertSql(ref tempIndex));
+                sb.Append(tokens.GetConvertSql(ref tempIndex, this));
                 i = tempIndex;
                 continue;
             }

@@ -35,8 +35,7 @@ END";
 LANGUAGE plpgsql
 AS $$
 DECLARE pkname varchar(200);
-BEGIN
-
+begin
 BEGIN
     -- 切换主键
     IF NOT EXISTS ( select * from pg_class where relname = 'PK_posSm_20190808912' and relkind = 'i' LIMIT 1) THEN 
@@ -59,7 +58,7 @@ BEGIN
 
 END;
 
-END;
+end;
 $$;";
         Assert.Equal(expected, result);
     }

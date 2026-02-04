@@ -14,7 +14,7 @@ namespace DatabaseMigrationTest
             int i = 0;
             // find token index of 'convert'
             for (int k = 0; k < tokens.Count; k++) if (tokens[k].Text.Equals("convert", System.StringComparison.OrdinalIgnoreCase)) { i = k; break; }
-            var res = frag.GetConvertSql(ref i);
+            var res = frag.GetConvertSql(ref i, new PostgreSqlProcedureScriptGenerator());
             Assert.Equal("CAST('gs' AS varchar(30))", res);
         }
 
@@ -26,7 +26,7 @@ namespace DatabaseMigrationTest
             var tokens = frag.ScriptTokenStream;
             int i = 0;
             for (int k = 0; k < tokens.Count; k++) if (tokens[k].Text.Equals("convert", System.StringComparison.OrdinalIgnoreCase)) { i = k; break; }
-            var res = frag.GetConvertSql(ref i);
+            var res = frag.GetConvertSql(ref i, new PostgreSqlProcedureScriptGenerator());
             Assert.Equal("CAST(mycol AS varchar(30))", res);
         }
 
@@ -39,7 +39,7 @@ namespace DatabaseMigrationTest
             int i = 0;
             for (int k = 0; k < tokens.Count; k++) if (tokens[k].Text.Equals("convert", System.StringComparison.OrdinalIgnoreCase)) { i = k; break; }
             var originI = i;
-            var res = frag.GetConvertSql(ref i);
+            var res = frag.GetConvertSql(ref i, new PostgreSqlProcedureScriptGenerator());
             Assert.Equal("CAST((a + b) * c AS decimal(10,2))", res);
             Assert.True(i > originI); // i should have advanced
         }

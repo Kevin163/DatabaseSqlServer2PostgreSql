@@ -64,7 +64,7 @@ END";
         var expected = @"CREATE OR REPLACE procedure a_update_sys  () 
 LANGUAGE plpgsql
 as $$
-
+begin
 /****************************************************************************  
 作者：陈提见  
 日期：2016-05-7  
@@ -108,6 +108,7 @@ IF NOT EXISTS ( SELECT 1 FROM information_schema.columns WHERE table_name = 'dbl
     ALTER TABLE dblist ADD readonlylogpwd varchar(30);
  END IF;
 
+end;
 $$;";
         Assert.Equal(expected, result);
     }
@@ -149,6 +150,63 @@ as
  UNION SELECT  'ul8w_ASaz5CQODS6swFhnhhcDCRD_gTmZz6H2wzNa4s' AS templateid,'预约状态提醒' AS templatename,'0' AS status
 )
 ";
+        Assert.Equal(expected, result);
+    }
+
+    [Fact]
+    public void SqlServerStringConcat_MigratesToPostgresConcat()
+    {
+        var sql = "select '1' + replace(ReleaseVersion,'.','')";
+        var parser = new TSql170Parser(true);
+        var fragment = parser.Parse(new System.IO.StringReader(sql), out var errors);
+
+        // 验证 SQL Server 语句无语法错误
+        Assert.Empty(errors);
+
+        var converter = new PostgreSqlProcedureScriptGenerator();
+        var result = converter.GenerateSqlScript(fragment);
+
+        // 验证迁移后的 PostgreSQL 语句
+        var expected = "select '1' || replace(releaseversion,'.','');";
+        Assert.Equal(expected, result.Trim());
+    }
+
+    [Fact]
+    public void ConvertProcedureWithPlusStringConcatenation_ProperlyConvertsToStringConcatenation()
+    {
+        var sql = @"/*
+ Walls
+ 2019-1-16:56
+ 获取最大的版本号
+*/
+
+CREATE PROCEDURE AppCheckVersion
+ @AppUpdateID uniqueidentifier
+AS
+select  MAX(CONVERT( int, '1' + replace(ReleaseVersion,'.',''))) from  AppUpdateHistory where AppUpdateID = @AppUpdateID";
+
+        var parser = new TSql170Parser(true);
+        var fragment = parser.Parse(new System.IO.StringReader(sql), out var errors);
+
+        Assert.Empty(errors);
+
+        var converter = new PostgreSqlProcedureScriptGenerator();
+        var result = converter.GenerateSqlScript(fragment);
+
+        var expected = @"/*
+ Walls
+ 2019-1-16:56
+ 获取最大的版本号
+*/
+
+CREATE OR REPLACE procedure appcheckversion (appupdateid  uuid)
+LANGUAGE plpgsql
+AS $$
+begin
+select  max(CAST('1' || replace(releaseversion,'.','') AS int)) from  appupdatehistory where appupdateid = appupdateid;
+end;
+$$;";
+
         Assert.Equal(expected, result);
     }
 }

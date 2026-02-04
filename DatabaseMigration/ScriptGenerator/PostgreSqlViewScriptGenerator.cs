@@ -128,7 +128,7 @@ public class PostgreSqlViewScriptGenerator : PostgreSqlScriptGenerator
             //处理类似convert(varchar(30) , 'gs') 的语句，转换为 CAST('gs' AS varchar(30))
             if (item.TokenType == TSqlTokenType.Convert)
             {
-                sb.Append(tokens.GetConvertSql(ref i));
+                sb.Append(tokens.GetConvertSql(ref i, this));
                 continue;
             }
             //处理非第一行的select语句，需要重置列索引和identity标志

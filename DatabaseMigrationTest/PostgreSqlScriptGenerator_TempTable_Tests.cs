@@ -20,7 +20,7 @@ CREATE TEMP TABLE temp AS SELECT * FROM table1;")]
     [InlineData(@"UPDATE #temp SET col = 1", @"UPDATE temp SET col = 1;")]
     [InlineData(@"DELETE FROM #temp", @"DELETE FROM temp;")]
     [InlineData(@"DROP TABLE #temp", @"DROP TABLE temp;")]
-    [InlineData(@"SELECT * FROM #temp", @"SELECT * FROM temp")]
+    [InlineData(@"SELECT * FROM #temp", @"SELECT * FROM temp;")]
     public void ConvertSingleStatement_WithTempTable_ShouldRemoveHashPrefix(string tsql, string expected)
     {
         var fragment = tsql.ParseToFragment();
