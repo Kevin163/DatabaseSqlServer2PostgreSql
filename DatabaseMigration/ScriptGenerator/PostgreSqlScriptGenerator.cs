@@ -166,6 +166,60 @@ public abstract class PostgreSqlScriptGenerator
     }
     #endregion
 
+    /// <summary>
+    /// 尝试跳过表提示（如 WITH(NOLOCK) 或 (NOLOCK)）
+    /// </summary>
+    /// <param name="tokens">Token列表</param>
+    /// <param name="index">当前索引，如果成功跳过，会被更新到最后一个Token的索引</param>
+    /// <returns>是否成功跳过</returns>
+    protected bool TrySkipTableHint(IList<TSqlParserToken> tokens, ref int index)
+    {
+        var i = index;
+        var item = tokens[i];
+        
+        // case 1: WITH (NOLOCK)
+        if (item.TokenType == TSqlTokenType.With)
+        {
+            var nextIndex = i + 1;
+            while (nextIndex < tokens.Count && tokens[nextIndex].TokenType == TSqlTokenType.WhiteSpace) nextIndex++;
+            if (nextIndex < tokens.Count && tokens[nextIndex].TokenType == TSqlTokenType.LeftParenthesis)
+            {
+                 nextIndex++;
+                 while (nextIndex < tokens.Count && tokens[nextIndex].TokenType == TSqlTokenType.WhiteSpace) nextIndex++;
+                 if (nextIndex < tokens.Count && (tokens[nextIndex].TokenType == TSqlTokenType.Identifier || tokens[nextIndex].TokenType == TSqlTokenType.QuotedIdentifier) 
+                    && tokens[nextIndex].Text.Trim().Equals("NOLOCK", StringComparison.OrdinalIgnoreCase))
+                 {
+                      nextIndex++;
+                      while (nextIndex < tokens.Count && tokens[nextIndex].TokenType == TSqlTokenType.WhiteSpace) nextIndex++;
+                      if (nextIndex < tokens.Count && tokens[nextIndex].TokenType == TSqlTokenType.RightParenthesis)
+                      {
+                          index = nextIndex; // Update outer index to the closing parenthesis
+                          return true;
+                      }
+                 }
+            }
+        }
+        
+        // case 2: (NOLOCK)
+        if (item.TokenType == TSqlTokenType.LeftParenthesis)
+        {
+             var nextIndex = i + 1;
+             while (nextIndex < tokens.Count && tokens[nextIndex].TokenType == TSqlTokenType.WhiteSpace) nextIndex++;
+             if (nextIndex < tokens.Count && (tokens[nextIndex].TokenType == TSqlTokenType.Identifier || tokens[nextIndex].TokenType == TSqlTokenType.QuotedIdentifier) 
+                && tokens[nextIndex].Text.Trim().Equals("NOLOCK", StringComparison.OrdinalIgnoreCase))
+             {
+                  nextIndex++;
+                  while (nextIndex < tokens.Count && tokens[nextIndex].TokenType == TSqlTokenType.WhiteSpace) nextIndex++;
+                  if (nextIndex < tokens.Count && tokens[nextIndex].TokenType == TSqlTokenType.RightParenthesis)
+                  {
+                      index = nextIndex; 
+                      return true;
+                  }
+             }
+        }
+        return false;
+    }
+
     #region 转换单个Create语句
     /// <summary>
     /// 转换单个Create语句，默认实现是直接拼接Token文本，子类可以重写此方法以实现更复杂的转换逻辑
@@ -718,6 +772,12 @@ public abstract class PostgreSqlScriptGenerator
                 sql.Append(item.Text.ToPostgreSqlIdentifier());
                 continue;
             }
+            #region 处理表提示，如 WITH(NOLOCK)
+            if (TrySkipTableHint(sqlTokens, ref i))
+            {
+                continue;
+            }
+            #endregion
             sql.Append(item.Text);
         }
         sql.AppendIfMissing(';');
@@ -1096,11 +1156,85 @@ public abstract class PostgreSqlScriptGenerator
                         sb.Append($"{nextTokens[valueTokenIndex].Text}{nextTokens[valueTokenIndex + 1].Text}{nextTokens[valueTokenIndex + 2].Text} AS {item.Text.ToPostgreSqlIdentifier()}");
                         i += valueTokenIndex + 3;
                     }
-                    //不是.，则表示是colName = 'value'这样的形式，直接取valueTokenIndex的值即可
+                    //不是.，则需要找到完整的表达式（可能包含字符串连接等）
                     else
                     {
-                        sb.Append($"{nextTokens[valueTokenIndex].Text} AS {item.Text.ToPostgreSqlIdentifier()}");
-                        i += valueTokenIndex + 1;
+                        // 找到表达式的结束位置（遇到逗号、FROM、WHERE等关键字表示表达式结束）
+                        var exprEndIndex = valueTokenIndex;
+                        int parenDepth = 0;
+                        for (var j = valueTokenIndex; j < nextTokens.Count; j++)
+                        {
+                            var tk = nextTokens[j];
+                            if (tk.TokenType == TSqlTokenType.LeftParenthesis) parenDepth++;
+                            else if (tk.TokenType == TSqlTokenType.RightParenthesis) parenDepth--;
+                            
+                            // 只有在括号深度为0时，才检查是否是表达式结束
+                            if (parenDepth == 0)
+                            {
+                                if (tk.TokenType == TSqlTokenType.Comma ||
+                                    tk.TokenType == TSqlTokenType.From ||
+                                    tk.TokenType == TSqlTokenType.Where ||
+                                    tk.TokenType == TSqlTokenType.Group ||
+                                    tk.TokenType == TSqlTokenType.Order ||
+                                    tk.TokenType == TSqlTokenType.Semicolon)
+                                {
+                                    exprEndIndex = j;
+                                    break;
+                                }
+                            }
+                            exprEndIndex = j + 1;
+                        }
+                        
+                        // 提取表达式tokens并进行转换
+                        var exprTokens = nextTokens.Skip(valueTokenIndex).Take(exprEndIndex - valueTokenIndex).ToList();
+                        var exprSb = new StringBuilder();
+                        for (var j = 0; j < exprTokens.Count; j++)
+                        {
+                            var tk = exprTokens[j];
+                            // 处理+号转换为||
+                            if (tk.TokenType == TSqlTokenType.Plus)
+                            {
+                                // 检查前后是否有字符串
+                                int prevIdx = j - 1;
+                                while (prevIdx >= 0 && exprTokens[prevIdx].TokenType == TSqlTokenType.WhiteSpace) prevIdx--;
+                                var prev = prevIdx >= 0 ? exprTokens[prevIdx] : null;
+                                
+                                int nextIdx = j + 1;
+                                while (nextIdx < exprTokens.Count && exprTokens[nextIdx].TokenType == TSqlTokenType.WhiteSpace) nextIdx++;
+                                var next = nextIdx < exprTokens.Count ? exprTokens[nextIdx] : null;
+                                
+                                bool prevIsString = prev != null && (prev.TokenType == TSqlTokenType.AsciiStringLiteral || prev.TokenType == TSqlTokenType.UnicodeStringLiteral);
+                                bool nextIsString = next != null && (next.TokenType == TSqlTokenType.AsciiStringLiteral || next.TokenType == TSqlTokenType.UnicodeStringLiteral);
+                                
+                                if (prevIsString || nextIsString)
+                                    exprSb.Append("||");
+                                else
+                                    exprSb.Append("+");
+                            }
+                            else if (tk.TokenType == TSqlTokenType.Variable)
+                            {
+                                exprSb.Append(tk.Text.ToPostgreVariableName());
+                            }
+                            else if (tk.TokenType == TSqlTokenType.Identifier || tk.TokenType == TSqlTokenType.QuotedIdentifier)
+                            {
+                                // 检查是否是 dbo.xxx 形式
+                                if (tk.Text.Equals("dbo", StringComparison.OrdinalIgnoreCase) && j + 1 < exprTokens.Count && exprTokens[j + 1].TokenType == TSqlTokenType.Dot)
+                                {
+                                    // 跳过 dbo.
+                                    j++;
+                                    continue;
+                                }
+                                exprSb.Append(tk.Text.ToPostgreSqlIdentifier());
+                            }
+                            else
+                            {
+                                exprSb.Append(tk.Text);
+                            }
+                        }
+                        
+                        // 添加表达式和别名, 并添加一个空格防止与后续关键字粘连
+                        sb.Append($"{exprSb.ToString().Trim()} AS {item.Text.ToPostgreSqlIdentifier()} ");
+                        i += exprEndIndex;
                     }
                 }
                 else
@@ -1144,6 +1278,12 @@ public abstract class PostgreSqlScriptGenerator
                     sb.Append("||");
                 else
                     sb.Append("+");
+                continue;
+            }
+            #endregion
+            #region 处理表提示，如 WITH(NOLOCK)
+            if (TrySkipTableHint(tokens, ref i))
+            {
                 continue;
             }
             #endregion
@@ -1400,6 +1540,13 @@ public abstract class PostgreSqlScriptGenerator
                 }
                 #endregion
 
+                #region 处理表提示，如 WITH(NOLOCK)
+                if (TrySkipTableHint(tokens, ref i))
+                {
+                    continue;
+                }
+                #endregion
+
                 sb.Append(item.Text);
             }
         }
@@ -1500,6 +1647,12 @@ public abstract class PostgreSqlScriptGenerator
                 sb.Append(item.Text.ToPostgreSqlIdentifier());
                 continue;
             }
+            #region 处理表提示，如 WITH(NOLOCK)
+            if (TrySkipTableHint(tokens, ref i))
+            {
+                continue;
+            }
+            #endregion
             sb.Append(item.Text);
         }
 
@@ -1545,6 +1698,12 @@ public abstract class PostgreSqlScriptGenerator
                  sb.Append(item.Text.ToPostgreVariableName());
                  continue;
             }
+            #region 处理表提示，如 WITH(NOLOCK)
+            if (TrySkipTableHint(tokens, ref i))
+            {
+                continue;
+            }
+            #endregion
             sb.Append(item.Text);
         }
         sb.AppendIfMissing(';');
@@ -1569,13 +1728,87 @@ public abstract class PostgreSqlScriptGenerator
         {
             //取出if条件后的语句进行转换
             var sqlTokens = tokens.Skip(startIndex).ToList();
-            //如果剩余语句块是begin ..end形式，则取出begin end之间的语句进行转换，因为if..begin..end已经在if条件部分处理过了
+            //如果剩余语句块是begin ..end形式，则取出begin end之间的语句进行转换
             var firstTokenType = sqlTokens.GetFirstNotWhiteSpaceTokenType();
             if (firstTokenType == TSqlTokenType.Begin)
             {
                 var beginIndex = sqlTokens.FindIndex(t => t.TokenType == TSqlTokenType.Begin);
-                var innerTokens = sqlTokens.Skip(beginIndex + 1).Take(sqlTokens.Count - beginIndex - 2).ToList();
-                sb.AppendLine(ConvertAllSqlAndSqlBatch(innerTokens));
+                
+                // 找到与第一个BEGIN匹配的END
+                int beginCount = 0;
+                int matchingEndIndex = -1;
+                for (var i = beginIndex; i < sqlTokens.Count; i++)
+                {
+                    if (sqlTokens[i].TokenType == TSqlTokenType.Begin)
+                    {
+                        beginCount++;
+                    }
+                    else if (sqlTokens[i].TokenType == TSqlTokenType.End)
+                    {
+                        beginCount--;
+                        if (beginCount == 0)
+                        {
+                            matchingEndIndex = i;
+                            break;
+                        }
+                    }
+                }
+                
+                // 取出BEGIN和END之间的内容（不包含BEGIN和END）
+                if (matchingEndIndex > beginIndex)
+                {
+                    var innerTokens = sqlTokens.Skip(beginIndex + 1).Take(matchingEndIndex - beginIndex - 1).ToList();
+                    sb.AppendLine(ConvertAllSqlAndSqlBatch(innerTokens));
+                }
+                
+                // 检查END后面是否有ELSE
+                var afterEndTokens = sqlTokens.Skip(matchingEndIndex + 1).ToList();
+                var afterEndTokenType = afterEndTokens.GetFirstNotWhiteSpaceTokenType();
+                if (afterEndTokenType == TSqlTokenType.Else)
+                {
+                    sb.AppendLine("ELSE");
+                    // 跳过ELSE关键字
+                    var elseIndex = afterEndTokens.FindIndex(t => t.TokenType == TSqlTokenType.Else);
+                    var elseBodyTokens = afterEndTokens.Skip(elseIndex + 1).ToList();
+                    
+                    // 检查ELSE后面是否是BEGIN块
+                    var elseBodyFirstTokenType = elseBodyTokens.GetFirstNotWhiteSpaceTokenType();
+                    if (elseBodyFirstTokenType == TSqlTokenType.Begin)
+                    {
+                        var elseBeginIndex = elseBodyTokens.FindIndex(t => t.TokenType == TSqlTokenType.Begin);
+                        
+                        // 找到ELSE块中BEGIN匹配的END
+                        int elseBeginCount = 0;
+                        int elseMatchingEndIndex = -1;
+                        for (var i = elseBeginIndex; i < elseBodyTokens.Count; i++)
+                        {
+                            if (elseBodyTokens[i].TokenType == TSqlTokenType.Begin)
+                            {
+                                elseBeginCount++;
+                            }
+                            else if (elseBodyTokens[i].TokenType == TSqlTokenType.End)
+                            {
+                                elseBeginCount--;
+                                if (elseBeginCount == 0)
+                                {
+                                    elseMatchingEndIndex = i;
+                                    break;
+                                }
+                            }
+                        }
+                        
+                        if (elseMatchingEndIndex > elseBeginIndex)
+                        {
+                            var elseInnerTokens = elseBodyTokens.Skip(elseBeginIndex + 1).Take(elseMatchingEndIndex - elseBeginIndex - 1).ToList();
+                            sb.AppendLine(ConvertAllSqlAndSqlBatch(elseInnerTokens));
+                        }
+                    }
+                    else
+                    {
+                        // ELSE后面不是BEGIN块，直接转换单个语句
+                        sb.AppendLine(ConvertSingleCompleteSqlAndSqlBatch(elseBodyTokens));
+                    }
+                }
             }
             else
             {
