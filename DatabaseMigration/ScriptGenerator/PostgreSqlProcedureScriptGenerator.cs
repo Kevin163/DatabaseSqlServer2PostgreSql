@@ -128,23 +128,24 @@ public class PostgreSqlProcedureScriptGenerator : PostgreSqlScriptGenerator
                     continue;
                 }
             }
-            //处理左括号，进入参数列表
             if (item.TokenType == TSqlTokenType.LeftParenthesis)
             {
                 if (foundProcName)
                 {
                     inParameterList = true;
-                    hasLeftParenthesis = true;
+                    if(!addedLeftParen)
+                    {
+                        hasLeftParenthesis = true;
+                    }
                     parenDepth++;
                 }
                 sb.Append(item.Text);
                 continue;
             }
-            //处理右括号，离开参数列表
             if (item.TokenType == TSqlTokenType.RightParenthesis)
             {
                 parenDepth--;
-                if (parenDepth == 0)
+                if (parenDepth == 0 && !addedLeftParen)
                 {
                     inParameterList = false;
                 }

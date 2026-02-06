@@ -82,9 +82,12 @@ public static class TSqlFragmentExtension_GetFirstCompleteSql
         if(newFragment.Batches.Count == 1 && newFragment.ScriptTokenStream.Count > 0 && newFragment.ScriptTokenStream[0].TokenType == TSqlTokenType.Select && sqlToEnd.Contains("union", StringComparison.OrdinalIgnoreCase))
         {
             var unionIndex = newFragment.ScriptTokenStream.FindFirstIndex(t => t.TokenType == TSqlTokenType.Union);
-            var firstSelectTokens = newFragment.ScriptTokenStream.Take(unionIndex).ToList();
-            index += firstSelectTokens.Count;
-            return firstSelectTokens;
+            if (unionIndex > 0)
+            {
+                var firstSelectTokens = newFragment.ScriptTokenStream.Take(unionIndex).ToList();
+                index += firstSelectTokens.Count;
+                return firstSelectTokens;
+            }
         }
         #endregion
         //取出第一个语句的起始和结束位置
