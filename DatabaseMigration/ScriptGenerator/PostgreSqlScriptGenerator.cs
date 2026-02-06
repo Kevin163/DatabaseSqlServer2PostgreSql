@@ -684,11 +684,66 @@ public abstract class PostgreSqlScriptGenerator
             return ConvertSelectIntoSql(tokens, intoIndex);
         }
 
+        // 检查是否有 TOP 子句（SELECT TOP n ...）
+        // PostgreSQL 不支持 TOP，需要转换为 LIMIT
+        var topValue = "";
+        var skipIndices = new HashSet<int>(); // 记录需要跳过的 token 索引
+
+        for (var i = 0; i < tokens.Count; i++)
+        {
+            if (tokens[i].TokenType == TSqlTokenType.Top)
+            {
+                skipIndices.Add(i); // 跳过 TOP
+                // 获取 TOP 后面的数值
+                var nextIndex = i + 1;
+                while (nextIndex < tokens.Count && tokens[nextIndex].TokenType == TSqlTokenType.WhiteSpace)
+                {
+                    skipIndices.Add(nextIndex); // 跳过空格
+                    nextIndex++;
+                }
+                if (nextIndex < tokens.Count)
+                {
+                    if (tokens[nextIndex].TokenType == TSqlTokenType.Integer || tokens[nextIndex].TokenType == TSqlTokenType.Numeric)
+                    {
+                        topValue = tokens[nextIndex].Text;
+                        skipIndices.Add(nextIndex); // 跳过数值
+                    }
+                    else if (tokens[nextIndex].TokenType == TSqlTokenType.LeftParenthesis)
+                    {
+                        // TOP (expression) 形式，跳到对应的右括号
+                        var parenCount = 1;
+                        var exprStart = nextIndex + 1;
+                        skipIndices.Add(nextIndex); // 跳过左括号
+                        nextIndex++;
+                        while (nextIndex < tokens.Count && parenCount > 0)
+                        {
+                            skipIndices.Add(nextIndex);
+                            if (tokens[nextIndex].TokenType == TSqlTokenType.LeftParenthesis) parenCount++;
+                            else if (tokens[nextIndex].TokenType == TSqlTokenType.RightParenthesis) parenCount--;
+                            nextIndex++;
+                        }
+                        // 提取表达式
+                        var exprTokens = tokens.Skip(exprStart).Take(nextIndex - exprStart - 1).ToList();
+                        var expr = string.Concat(exprTokens.Select(t => t.Text));
+                        topValue = $"({expr})";
+                    }
+                }
+                break;
+            }
+        }
+
         //完整的selct语句包含select,from,where等，而只有select部分中的name='value',name = a.columnName等需要处理,而from ,where等不需要处理
         var isInSelect = false;
         for (var i = 0; i < tokens.Count; i++)
         {
+            // 跳过 TOP 关键字和其后的数值
+            if (skipIndices.Contains(i))
+            {
+                continue;
+            }
+
             var item = tokens[i];
+
             #region 处理是否在select语句中
             if (item.TokenType == TSqlTokenType.Select)
             {
@@ -804,8 +859,40 @@ public abstract class PostgreSqlScriptGenerator
             }
             #endregion
             //非特殊类型的，直接添加
-            sb.Append(item.Text);
+            // 避免连续多个空格
+            if (item.TokenType == TSqlTokenType.WhiteSpace)
+            {
+                // 检查前一个添加的字符是否是空格
+                if (sb.Length > 0 && sb[sb.Length - 1] == ' ')
+                {
+                    continue; // 跳过多余的空格
+                }
+                sb.Append(item.Text);
+            }
+            else
+            {
+                sb.Append(item.Text);
+            }
         }
+
+        // 如果有 TOP 子句，在末尾添加 LIMIT
+        if (!string.IsNullOrEmpty(topValue))
+        {
+            sb.AppendIfMissing(';');
+            var result = sb.ToString();
+            // 在分号之前插入 LIMIT
+            var lastSemicolonIndex = result.LastIndexOf(';');
+            if (lastSemicolonIndex > 0)
+            {
+                result = result.Insert(lastSemicolonIndex, $" LIMIT {topValue}");
+            }
+            else
+            {
+                result = result.TrimEnd(';') + $" LIMIT {topValue};";
+            }
+            return result;
+        }
+
         sb.AppendIfMissing(';');
         return sb.ToString();
     }
@@ -819,6 +906,50 @@ public abstract class PostgreSqlScriptGenerator
     protected virtual string ConvertSelectIntoSql(IList<TSqlParserToken> tokens, int intoIndex)
     {
         var sb = new StringBuilder();
+
+        // 检查是否有 TOP 子句（SELECT TOP n ... INTO）
+        var topValue = "";
+        var skipIndices = new HashSet<int>();
+
+        for (var i = 0; i < intoIndex; i++)
+        {
+            if (tokens[i].TokenType == TSqlTokenType.Top)
+            {
+                skipIndices.Add(i);
+                var nextIndex = i + 1;
+                while (nextIndex < intoIndex && tokens[nextIndex].TokenType == TSqlTokenType.WhiteSpace)
+                {
+                    skipIndices.Add(nextIndex);
+                    nextIndex++;
+                }
+                if (nextIndex < intoIndex)
+                {
+                    if (tokens[nextIndex].TokenType == TSqlTokenType.Integer || tokens[nextIndex].TokenType == TSqlTokenType.Numeric)
+                    {
+                        topValue = tokens[nextIndex].Text;
+                        skipIndices.Add(nextIndex);
+                    }
+                    else if (tokens[nextIndex].TokenType == TSqlTokenType.LeftParenthesis)
+                    {
+                        var parenCount = 1;
+                        var exprStart = nextIndex + 1;
+                        skipIndices.Add(nextIndex);
+                        nextIndex++;
+                        while (nextIndex < intoIndex && parenCount > 0)
+                        {
+                            skipIndices.Add(nextIndex);
+                            if (tokens[nextIndex].TokenType == TSqlTokenType.LeftParenthesis) parenCount++;
+                            else if (tokens[nextIndex].TokenType == TSqlTokenType.RightParenthesis) parenCount--;
+                            nextIndex++;
+                        }
+                        var exprTokens = tokens.Skip(exprStart).Take(nextIndex - exprStart - 1).ToList();
+                        var expr = string.Concat(exprTokens.Select(t => t.Text));
+                        topValue = $"({expr})";
+                    }
+                }
+                break;
+            }
+        }
 
         // 1. 首先查找表名
         var tableNameIndex = -1;
@@ -852,6 +983,12 @@ public abstract class PostgreSqlScriptGenerator
         // 5. 添加 SELECT 部分（从开始到 INTO 之前）
         for (var i = 0; i < intoIndex; i++)
         {
+            // 跳过 TOP 和相关 token
+            if (skipIndices.Contains(i))
+            {
+                continue;
+            }
+
             var item = tokens[i];
 
             #region 处理dbo.xxx,直接跳过dbo.,从xxx开始继续转换
@@ -903,7 +1040,19 @@ public abstract class PostgreSqlScriptGenerator
             }
             #endregion
 
-            sb.Append(item.Text);
+            // 避免连续多个空格
+            if (item.TokenType == TSqlTokenType.WhiteSpace)
+            {
+                if (sb.Length > 0 && sb[sb.Length - 1] == ' ')
+                {
+                    continue;
+                }
+                sb.Append(item.Text);
+            }
+            else
+            {
+                sb.Append(item.Text);
+            }
         }
 
         // 6. 添加 FROM 及之后的子句（跳过 INTO 和表名）
@@ -960,6 +1109,12 @@ public abstract class PostgreSqlScriptGenerator
             }
         }
 
+        // 添加 LIMIT（如果有 TOP 子句）
+        if (!string.IsNullOrEmpty(topValue))
+        {
+            sb.Append($" LIMIT {topValue}");
+        }
+
         sb.Append(";");
         return sb.ToString();
     }
@@ -974,8 +1129,63 @@ public abstract class PostgreSqlScriptGenerator
     protected virtual string ConvertInsertSql(IList<TSqlParserToken> tokens)
     {
         var sb = new StringBuilder();
+
+        // 检查是否有 TOP 子句（INSERT INTO ... SELECT TOP n ...）
+        // PostgreSQL 不支持 TOP，需要转换为 LIMIT
+        var topValue = "";
+        var skipIndices = new HashSet<int>(); // 记录需要跳过的 token 索引
+
         for (var i = 0; i < tokens.Count; i++)
         {
+            if (tokens[i].TokenType == TSqlTokenType.Top)
+            {
+                skipIndices.Add(i); // 跳过 TOP
+                // 获取 TOP 后面的数值
+                var nextIndex = i + 1;
+                while (nextIndex < tokens.Count && tokens[nextIndex].TokenType == TSqlTokenType.WhiteSpace)
+                {
+                    skipIndices.Add(nextIndex); // 跳过空格
+                    nextIndex++;
+                }
+                if (nextIndex < tokens.Count)
+                {
+                    if (tokens[nextIndex].TokenType == TSqlTokenType.Integer || tokens[nextIndex].TokenType == TSqlTokenType.Numeric)
+                    {
+                        topValue = tokens[nextIndex].Text;
+                        skipIndices.Add(nextIndex); // 跳过数值
+                    }
+                    else if (tokens[nextIndex].TokenType == TSqlTokenType.LeftParenthesis)
+                    {
+                        // TOP (expression) 形式，跳到对应的右括号
+                        var parenCount = 1;
+                        var exprStart = nextIndex + 1;
+                        skipIndices.Add(nextIndex); // 跳过左括号
+                        nextIndex++;
+                        while (nextIndex < tokens.Count && parenCount > 0)
+                        {
+                            skipIndices.Add(nextIndex);
+                            if (tokens[nextIndex].TokenType == TSqlTokenType.LeftParenthesis) parenCount++;
+                            else if (tokens[nextIndex].TokenType == TSqlTokenType.RightParenthesis) parenCount--;
+                            nextIndex++;
+                        }
+                        // 提取表达式
+                        var exprTokens = tokens.Skip(exprStart).Take(nextIndex - exprStart - 1).ToList();
+                        var expr = string.Concat(exprTokens.Select(t => t.Text));
+                        topValue = $"({expr})";
+                    }
+                }
+                break;
+            }
+        }
+
+        for (var i = 0; i < tokens.Count; i++)
+        {
+            // 跳过 TOP 关键字和其后的数值
+            if (skipIndices.Contains(i))
+            {
+                continue;
+            }
+
             var item = tokens[i];
             //处理dbo.name这样的标识符，去掉前面的dbo.
             if (item.TokenType == TSqlTokenType.AsciiStringOrQuotedIdentifier || item.TokenType == TSqlTokenType.QuotedIdentifier)
@@ -991,6 +1201,25 @@ public abstract class PostgreSqlScriptGenerator
             }
             sb.Append(item.Text);
         }
+
+        // 如果有 TOP 子句，在末尾添加 LIMIT
+        if (!string.IsNullOrEmpty(topValue))
+        {
+            sb.AppendIfMissing(';');
+            var result = sb.ToString();
+            // 在分号之前插入 LIMIT
+            var lastSemicolonIndex = result.LastIndexOf(';');
+            if (lastSemicolonIndex > 0)
+            {
+                result = result.Insert(lastSemicolonIndex, $" LIMIT {topValue}");
+            }
+            else
+            {
+                result = result.TrimEnd(';') + $" LIMIT {topValue};";
+            }
+            return result;
+        }
+
         sb.AppendIfMissing(';');
         return sb.ToString();
     }
@@ -1169,8 +1398,15 @@ public abstract class PostgreSqlScriptGenerator
             sql.Append(") THEN ");
             return sql.ToString();
         }
-        //默认直接拼接
-        return string.Concat(tokens.Select(w => w.Text));
+        //默认直接拼接，但要确保添加 THEN
+        var ifCondition = string.Concat(tokens.Select(w => w.Text));
+        // 检查是否已经以 THEN 结尾
+        if (ifCondition.Trim().EndsWith("THEN", StringComparison.OrdinalIgnoreCase))
+        {
+            return ifCondition;
+        }
+        // 如果不包含 THEN，添加 THEN（注意：ifCondition 已经包含 IF 关键字）
+        return $"{ifCondition.Trim()} THEN ";
     }
     #endregion
 
@@ -1315,9 +1551,55 @@ public abstract class PostgreSqlScriptGenerator
                 foundEqualsSign = true;
             }
         }
-        //sbValue中的语句也需要去掉''后进行转换
-        var valueTokens = sbValue.ToString().Trim().Trim('\'').ParseToFragment().ScriptTokenStream;
-        sb.Append("'").Append(ConvertAllSqlAndSqlBatch(valueTokens)).Append("';");
+
+        // 处理赋值部分
+        var valueStr = sbValue.ToString().Trim();
+
+        // 检查是否是字符串字面量（被单引号括起来）
+        if (valueStr.StartsWith("'") && valueStr.EndsWith("'"))
+        {
+            // 字符串字面量：去掉外层单引号后解析内容
+            var innerContent = valueStr.Substring(1, valueStr.Length - 2);
+            if (!string.IsNullOrWhiteSpace(innerContent))
+            {
+                try
+                {
+                    var valueTokens = innerContent.ParseToFragment().ScriptTokenStream;
+                    var convertedValue = ConvertAllSqlAndSqlBatch(valueTokens);
+                    sb.Append("'").Append(convertedValue).Append("';");
+                }
+                catch
+                {
+                    // 如果解析失败，直接使用原始值
+                    sb.Append(valueStr).Append(";");
+                }
+            }
+            else
+            {
+                sb.Append("'';");
+            }
+        }
+        else
+        {
+            // 非字符串字面量（如函数调用、变量等）：直接转换
+            try
+            {
+                var valueTokens = valueStr.ParseToFragment().ScriptTokenStream;
+                var convertedValue = ConvertAllSqlAndSqlBatch(valueTokens);
+                sb.Append(convertedValue).Append(";");
+            }
+            catch
+            {
+                // 如果解析失败（如 getdate(); 这样的表达式），直接使用原值
+                sb.Append(valueStr);
+                // 如果没有分号，添加分号
+                if (!valueStr.EndsWith(";"))
+                {
+                    sb.Append(";");
+                }
+            }
+        }
+
         return sb.ToString();
     }
     #endregion

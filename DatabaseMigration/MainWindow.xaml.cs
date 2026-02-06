@@ -24,7 +24,11 @@ namespace DatabaseMigration
         {
             if (AutoRun)
             {
-                // 自动运行模式：延迟一秒后自动开始迁移
+                // 自动运行模式：隐藏窗口，让它在后台运行
+                this.Visibility = Visibility.Hidden;
+                this.ShowInTaskbar = false;
+
+                // 延迟一秒后自动开始迁移
                 await Task.Delay(1000);
                 await RunMigrationAsync();
             }

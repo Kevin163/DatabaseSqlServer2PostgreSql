@@ -22,7 +22,7 @@ end";
         var result = generator.GenerateSqlScript(fragment.ScriptTokenStream);
 
         // Expect the converter to create index if not exists in PostgreSQL style
-        var expected = @"IF NOT EXISTS ( select * from pg_class where relname = 'ix_hotelvoiceqtys' and relkind = 'i' LIMIT 1) THEN
+        var expected = @"IF NOT EXISTS ( select * from pg_class where relname = 'ix_hotelvoiceqtys' and relkind = 'i' LIMIT 1) THEN 
 
  create index ix_hotelvoiceqtys on hotelvoiceqtys(hid,qtytype);
  END IF;
