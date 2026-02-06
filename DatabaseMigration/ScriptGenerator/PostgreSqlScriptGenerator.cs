@@ -9,6 +9,9 @@ namespace DatabaseMigration.ScriptGenerator;
 /// </summary>
 public abstract class PostgreSqlScriptGenerator
 {
+    // 记录在 Declare 阶段已经转换为 OPEN 的游标名称
+    protected HashSet<string> _cursorsOpenedInDeclare = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
     /// <summary>
     /// 由子类实现，创建SQL脚本生成访问器
     /// </summary>
@@ -110,8 +113,56 @@ public abstract class PostgreSqlScriptGenerator
         {
             return ConvertDeclareSql(sqlTokens);
         }
+        //处理while语句
+        if (sqlTokenType == TSqlTokenType.While)
+        {
+            return ConvertWhileSql(sqlTokens);
+        }
+        //处理Open语句
+        if (sqlTokenType == TSqlTokenType.Open)
+        {
+            return ConvertOpenSql(sqlTokens);
+        }
+        //处理Fetch语句
+        if (sqlTokenType == TSqlTokenType.Fetch)
+        {
+            return ConvertFetchSql(sqlTokens);
+        }
+        //处理Close语句
+        if (sqlTokenType == TSqlTokenType.Close)
+        {
+            return ConvertCloseSql(sqlTokens);
+        }
+        //处理Deallocate语句
+        if (sqlTokenType == TSqlTokenType.Deallocate)
+        {
+            return ConvertDeallocateSql(sqlTokens);
+        }
+        //处理Set语句
+        if (sqlTokenType == TSqlTokenType.Set)
+        {
+            return ConvertSetSql(sqlTokens);
+        }
         //非特殊语句，则直接添加
-        return string.Concat(sqlTokens.Select(w => w.Text));
+        return ConvertUnknownSql(sqlTokens);
+    }
+    /// <summary>
+    /// 处理未知/通用语句，添加变量处理逻辑
+    /// </summary>
+    protected virtual string ConvertUnknownSql(IList<TSqlParserToken> tokens)
+    {
+        var sb = new StringBuilder();
+        for (var i = 0; i < tokens.Count; i++)
+        {
+            var item = tokens[i];
+            if (item.TokenType == TSqlTokenType.Variable)
+            {
+                sb.Append(item.Text.ToPostgreVariableName());
+                continue;
+            }
+            sb.Append(item.Text);
+        }
+        return sb.ToString();
     }
     #endregion
 
@@ -530,26 +581,103 @@ public abstract class PostgreSqlScriptGenerator
     /// <summary>
     /// 转换单个Delete语句，默认实现会处理where条件中的dateadd函数调用，子类可以重写此方法以实现更复杂的转换逻辑
     /// postgresql中的delete语句，必须包含from，所以需要将delete table1 转换为delete from table1格式，否则会报错
+    /// 同时处理 DELETE alias FROM table alias INNER JOIN ... ON ... 的 SQL Server 语法
+    /// 转换为 PostgreSQL 的 DELETE FROM table alias USING ... WHERE ... 语法
     /// </summary>
     /// <param name="sqlTokens"></param>
     /// <returns></returns>
     protected virtual string ConvertDeleteSql(IList<TSqlParserToken> sqlTokens)
     {
-        var hasFrom = false;
-        //从第一个delete开始，到下一个identity之前，检查是否有from关键字
-        foreach(var token in sqlTokens)
+        // 检测是否是 DELETE alias FROM table alias JOIN 模式
+        // 模式：DELETE alias FROM table alias INNER/LEFT/RIGHT JOIN ...
+        var deleteIndex = sqlTokens.FindFirstIndex(t => t.TokenType == TSqlTokenType.Delete);
+        if (deleteIndex < 0)
         {
-            if (token.TokenType == TSqlTokenType.From)
+            // 不是DELETE语句，直接返回
+            return string.Concat(sqlTokens.Select(w => w.Text));
+        }
+
+        // 查找DELETE后的第一个标识符（可能是别名或表名）
+        var firstIdentifierIndex = -1;
+        var hasDirectFrom = false;  // DELETE后直接跟FROM（在第一个标识符之前）
+        for (var i = deleteIndex + 1; i < sqlTokens.Count; i++)
+        {
+            if (sqlTokens[i].TokenType == TSqlTokenType.From)
             {
-                hasFrom = true;
+                // FROM在第一个标识符之前，说明是DELETE FROM table格式
+                if (firstIdentifierIndex < 0)
+                {
+                    hasDirectFrom = true;
+                }
                 break;
             }
-            if (token.TokenType == TSqlTokenType.AsciiStringOrQuotedIdentifier || token.TokenType == TSqlTokenType.QuotedIdentifier || token.TokenType == TSqlTokenType.Identifier)
+            if (sqlTokens[i].TokenType == TSqlTokenType.Identifier || 
+                sqlTokens[i].TokenType == TSqlTokenType.QuotedIdentifier)
+            {
+                if (firstIdentifierIndex < 0)
+                {
+                    firstIdentifierIndex = i;
+                }
+            }
+            // 遇到WHERE则停止，说明没有FROM（DELETE table WHERE...）
+            if (sqlTokens[i].TokenType == TSqlTokenType.Where)
             {
                 break;
             }
         }
-        //转换delete语句
+
+        // 查找FROM关键字（只在有别名的情况下才可能是JOIN语法）
+        // DELETE a FROM table a INNER JOIN... 格式
+        var fromIndex = -1;
+        if (firstIdentifierIndex > 0)
+        {
+            // 从第一个标识符后面开始找FROM
+            fromIndex = sqlTokens.FindFirstIndex(t => t.TokenType == TSqlTokenType.From, firstIdentifierIndex + 1);
+            // 如果找到的FROM在WHERE后面（在子查询中），则忽略
+            var whereIndex = sqlTokens.FindFirstIndex(t => t.TokenType == TSqlTokenType.Where, firstIdentifierIndex + 1);
+            if (whereIndex > 0 && fromIndex > whereIndex)
+            {
+                // FROM在WHERE后面，可能是子查询中的FROM，不是DELETE的FROM
+                // 重新在WHERE之前查找FROM
+                fromIndex = -1;
+                for (var i = firstIdentifierIndex + 1; i < whereIndex; i++)
+                {
+                    if (sqlTokens[i].TokenType == TSqlTokenType.From)
+                    {
+                        fromIndex = i;
+                        break;
+                    }
+                }
+            }
+        }
+        
+        // 查找JOIN关键字（INNER JOIN, LEFT JOIN, RIGHT JOIN 等）
+        var joinIndex = -1;
+        if (fromIndex > 0)  // 只有在有FROM关键字时才查找JOIN
+        {
+            for (var i = fromIndex + 1; i < sqlTokens.Count; i++)
+            {
+                if (sqlTokens[i].TokenType == TSqlTokenType.Join || 
+                    sqlTokens[i].TokenType == TSqlTokenType.Inner ||
+                    sqlTokens[i].TokenType == TSqlTokenType.Left ||
+                    sqlTokens[i].TokenType == TSqlTokenType.Right ||
+                    sqlTokens[i].TokenType == TSqlTokenType.Cross)
+                {
+                    joinIndex = i;
+                    break;
+                }
+            }
+        }
+
+        // 如果是 DELETE alias FROM table alias JOIN ... ON ... 模式
+        // 需要转换为 DELETE FROM table alias USING (...) b WHERE ...
+        if (fromIndex > 0 && joinIndex > fromIndex && firstIdentifierIndex > 0 && firstIdentifierIndex < fromIndex)
+        {
+            return ConvertDeleteJoinSql(sqlTokens, deleteIndex, firstIdentifierIndex, fromIndex, joinIndex);
+        }
+
+        // 普通DELETE语句处理（原有逻辑）
+        var hasFrom = hasDirectFrom || fromIndex > 0;
         var sql = new StringBuilder();
         for (var i = 0; i < sqlTokens.Count; i++)
         {
@@ -560,10 +688,22 @@ public abstract class PostgreSqlScriptGenerator
                 sql.Append("DELETE FROM");
                 continue;
             }
+            //处理Variable变量
+            if (item.TokenType == TSqlTokenType.Variable)
+            {
+                sql.Append(item.Text.ToPostgreVariableName());
+                continue;
+            }
             //处理dateadd函数调用
             if (item.TokenType == TSqlTokenType.Identifier && item.Text.Equals("dateadd", StringComparison.OrdinalIgnoreCase))
             {
                 sql.Append(sqlTokens.GetDateAddSql(ref i));
+                continue;
+            }
+            //处理datediff函数调用
+            if (item.TokenType == TSqlTokenType.Identifier && item.Text.Equals("datediff", StringComparison.OrdinalIgnoreCase))
+            {
+                sql.Append(sqlTokens.GetDateDiffSql(ref i));
                 continue;
             }
             //处理临时表（以 # 开头的标识符）
@@ -581,6 +721,135 @@ public abstract class PostgreSqlScriptGenerator
             sql.Append(item.Text);
         }
         sql.AppendIfMissing(';');
+        return sql.ToString();
+    }
+
+    /// <summary>
+    /// 转换 DELETE alias FROM table alias JOIN ... ON ... 语法
+    /// 转换为 PostgreSQL 的 DELETE FROM table alias USING (...) b WHERE ...
+    /// </summary>
+    private string ConvertDeleteJoinSql(IList<TSqlParserToken> sqlTokens, int deleteIndex, int aliasIndex, int fromIndex, int joinIndex)
+    {
+        var sql = new StringBuilder();
+        
+        // 获取表别名
+        var alias = sqlTokens[aliasIndex].Text.ToPostgreSqlIdentifier();
+        
+        // 获取FROM后的表名和别名
+        var tableStartIndex = fromIndex + 1;
+        while (tableStartIndex < sqlTokens.Count && sqlTokens[tableStartIndex].TokenType == TSqlTokenType.WhiteSpace)
+        {
+            tableStartIndex++;
+        }
+        
+        // 查找ON关键字
+        var onIndex = sqlTokens.FindFirstIndex(t => t.TokenType == TSqlTokenType.On, joinIndex);
+        
+        // 获取表名
+        var tableNameSb = new StringBuilder();
+        for (var i = tableStartIndex; i < joinIndex; i++)
+        {
+            var item = sqlTokens[i];
+            if (item.TokenType == TSqlTokenType.Identifier || item.TokenType == TSqlTokenType.QuotedIdentifier)
+            {
+                tableNameSb.Append(item.Text.ToPostgreSqlIdentifier());
+            }
+            else if (item.TokenType == TSqlTokenType.WhiteSpace)
+            {
+                tableNameSb.Append(item.Text);
+            }
+        }
+        var tablePart = tableNameSb.ToString().Trim();
+        
+        // 获取JOIN部分（从JOIN到ON之前，不包括INNER/LEFT/RIGHT等关键字，构建为子查询）
+        var joinContentStart = joinIndex;
+        // 跳过 INNER/LEFT/RIGHT 等关键字直到找到 JOIN
+        while (joinContentStart < sqlTokens.Count && sqlTokens[joinContentStart].TokenType != TSqlTokenType.Join)
+        {
+            joinContentStart++;
+        }
+        // 跳过JOIN关键字本身
+        joinContentStart++;
+        
+        // 获取JOIN后的子查询或表
+        var usingSb = new StringBuilder();
+        var depth = 0;
+        for (var i = joinContentStart; i < onIndex; i++)
+        {
+            var item = sqlTokens[i];
+            if (item.TokenType == TSqlTokenType.LeftParenthesis) depth++;
+            if (item.TokenType == TSqlTokenType.RightParenthesis) depth--;
+            
+            if (item.TokenType == TSqlTokenType.Variable)
+            {
+                usingSb.Append(item.Text.ToPostgreVariableName());
+            }
+            else if (item.TokenType == TSqlTokenType.Identifier && item.Text.StartsWith("#"))
+            {
+                usingSb.Append(item.Text.ToPostgreSqlIdentifier());
+            }
+            else if (item.TokenType == TSqlTokenType.Identifier && item.Text.Equals("datediff", StringComparison.OrdinalIgnoreCase))
+            {
+                usingSb.Append(sqlTokens.GetDateDiffSql(ref i));
+            }
+            else if (item.TokenType == TSqlTokenType.Identifier && item.Text.Equals("dateadd", StringComparison.OrdinalIgnoreCase))
+            {
+                usingSb.Append(sqlTokens.GetDateAddSql(ref i));
+            }
+            else if (item.TokenType == TSqlTokenType.Identifier || item.TokenType == TSqlTokenType.QuotedIdentifier)
+            {
+                usingSb.Append(item.Text.ToPostgreSqlIdentifier());
+            }
+            else
+            {
+                usingSb.Append(item.Text);
+            }
+        }
+        var usingPart = usingSb.ToString().Trim();
+        
+        // 获取ON后的条件（转换为WHERE条件）
+        var whereSb = new StringBuilder();
+        for (var i = onIndex + 1; i < sqlTokens.Count; i++)
+        {
+            var item = sqlTokens[i];
+            if (item.TokenType == TSqlTokenType.Variable)
+            {
+                whereSb.Append(item.Text.ToPostgreVariableName());
+            }
+            else if (item.TokenType == TSqlTokenType.Identifier && item.Text.StartsWith("#"))
+            {
+                whereSb.Append(item.Text.ToPostgreSqlIdentifier());
+            }
+            else if (item.TokenType == TSqlTokenType.Identifier && item.Text.Equals("datediff", StringComparison.OrdinalIgnoreCase))
+            {
+                whereSb.Append(sqlTokens.GetDateDiffSql(ref i));
+            }
+            else if (item.TokenType == TSqlTokenType.Identifier && item.Text.Equals("dateadd", StringComparison.OrdinalIgnoreCase))
+            {
+                whereSb.Append(sqlTokens.GetDateAddSql(ref i));
+            }
+            else if (item.TokenType == TSqlTokenType.Identifier || item.TokenType == TSqlTokenType.QuotedIdentifier)
+            {
+                whereSb.Append(item.Text.ToPostgreSqlIdentifier());
+            }
+            else
+            {
+                whereSb.Append(item.Text);
+            }
+        }
+        var wherePart = whereSb.ToString().Trim();
+        
+        // 构建 PostgreSQL DELETE FROM ... USING ... WHERE 语句
+        sql.Append("DELETE FROM ");
+        sql.Append(tablePart);
+        sql.AppendLine();
+        sql.Append("\tUSING ");
+        sql.Append(usingPart);
+        sql.AppendLine();
+        sql.Append("\tWHERE ");
+        sql.Append(wherePart);
+        sql.AppendIfMissing(';');
+        
         return sql.ToString();
     }
     #endregion
@@ -804,6 +1073,20 @@ public abstract class PostgreSqlScriptGenerator
                     continue;
                 }
 
+                // 判断是否是 DATEDIFF 函数，需要转换为 PostgreSQL 的 EXTRACT(EPOCH FROM ...) 
+                if (item.Text.Equals("datediff", StringComparison.OrdinalIgnoreCase) && nextTokenType == TSqlTokenType.LeftParenthesis)
+                {
+                    sb.Append(tokens.GetDateDiffSql(ref i));
+                    continue;
+                }
+
+                // 判断是否是 DATEADD 函数
+                if (item.Text.Equals("dateadd", StringComparison.OrdinalIgnoreCase) && nextTokenType == TSqlTokenType.LeftParenthesis)
+                {
+                    sb.Append(tokens.GetDateAddSql(ref i));
+                    continue;
+                }
+
                 if (nextTokenType == TSqlTokenType.EqualsSign && isInSelect)
                 {
                     var valueTokenIndex = nextTokens.FindIndex(w => w.TokenType != TSqlTokenType.WhiteSpace && w.TokenType != TSqlTokenType.EqualsSign);
@@ -827,6 +1110,12 @@ public abstract class PostgreSqlScriptGenerator
                 continue;
             }
             #endregion
+            //处理Variable变量
+            if (item.TokenType == TSqlTokenType.Variable)
+            {
+                 sb.Append(item.Text.ToPostgreVariableName());
+                 continue;
+            }
             #region 处理类似convert(varchar(30) , 'gs') 的语句，转换为 CAST('gs' AS varchar(30))
             //处理类似convert(varchar(30) , 'gs') 的语句，转换为 CAST('gs' AS varchar(30))
             if (item.TokenType == TSqlTokenType.Convert)
@@ -871,6 +1160,12 @@ public abstract class PostgreSqlScriptGenerator
             }
             else
             {
+                //处理Variable变量
+                if (item.TokenType == TSqlTokenType.Variable)
+                {
+                    sb.Append(item.Text.ToPostgreVariableName());
+                    continue;
+                }
                 sb.Append(item.Text);
             }
         }
@@ -1193,6 +1488,12 @@ public abstract class PostgreSqlScriptGenerator
                 sb.Append(tokens.GetIdentityName(ref i));
                 continue;
             }
+            //处理Variable变量
+            if (item.TokenType == TSqlTokenType.Variable)
+            {
+                 sb.Append(item.Text.ToPostgreVariableName());
+                 continue;
+            }
             //处理临时表（以 # 开头的标识符）
             if (item.TokenType == TSqlTokenType.Identifier && item.Text.StartsWith("#"))
             {
@@ -1237,6 +1538,12 @@ public abstract class PostgreSqlScriptGenerator
             {
                 sb.Append(tokens.GetIdentityName(ref i));
                 continue;
+            }
+            //处理Variable变量
+            if (item.TokenType == TSqlTokenType.Variable)
+            {
+                 sb.Append(item.Text.ToPostgreVariableName());
+                 continue;
             }
             sb.Append(item.Text);
         }
@@ -1399,13 +1706,73 @@ public abstract class PostgreSqlScriptGenerator
             return sql.ToString();
         }
         //默认直接拼接，但要确保添加 THEN
-        var ifCondition = string.Concat(tokens.Select(w => w.Text));
+        //默认进行通用的转换逻辑
+        var sbFallback = new StringBuilder();
+        for (var i = 0; i < tokens.Count; i++)
+        {
+            var item = tokens[i];
+            
+            //处理 DATEDIFF
+            if (item.TokenType == TSqlTokenType.Identifier && item.Text.Equals("datediff", StringComparison.OrdinalIgnoreCase))
+            {
+                 sbFallback.Append(tokens.GetDateDiffSql(ref i));
+                 continue;
+            }
+             //处理 DATEADD
+            if (item.TokenType == TSqlTokenType.Identifier && item.Text.Equals("dateadd", StringComparison.OrdinalIgnoreCase))
+            {
+                 sbFallback.Append(tokens.GetDateAddSql(ref i));
+                 continue;
+            }
+             // 处理 GETDATE()
+            if (item.TokenType == TSqlTokenType.Identifier && item.Text.Equals("getdate", StringComparison.OrdinalIgnoreCase))
+            {
+                   // 简单处理 GETDATE() -> NOW()
+                // 检查后面是否有 ()
+                var nextIndex = i + 1;
+                while(nextIndex < tokens.Count && tokens[nextIndex].TokenType == TSqlTokenType.WhiteSpace) nextIndex++;
+                if (nextIndex < tokens.Count && tokens[nextIndex].TokenType == TSqlTokenType.LeftParenthesis)
+                {
+                   // 我们只替换GETDATE标识符为NOW，后面的括号由后续循环处理
+                   sbFallback.Append("NOW");
+                   continue;
+                }
+            }
+
+            //处理临时表（以 # 开头的标识符）
+            if (item.TokenType == TSqlTokenType.Identifier && item.Text.StartsWith("#"))
+            {
+                sbFallback.Append(item.Text.ToPostgreSqlIdentifier());
+                continue;
+            }
+
+            // 处理标识符
+            if (item.TokenType == TSqlTokenType.Identifier || item.TokenType == TSqlTokenType.QuotedIdentifier)
+            {
+                 // 判断是否是 ISNULL 函数，需要转换为 coalesce
+                 if (item.Text.Equals("isnull", StringComparison.OrdinalIgnoreCase))
+                 {
+                     var nextTokens = tokens.Skip(i + 1).ToList();
+                     var nextTokenType = nextTokens.GetFirstNotWhiteSpaceTokenType();
+                     if (nextTokenType == TSqlTokenType.LeftParenthesis)
+                     {
+                         sbFallback.Append("coalesce");
+                         continue;
+                     }
+                 }
+                 sbFallback.Append(item.Text.ToPostgreSqlIdentifier());
+                 continue;
+            }
+            sbFallback.Append(item.Text);
+        }
+        
+        var ifCondition = sbFallback.ToString();
         // 检查是否已经以 THEN 结尾
         if (ifCondition.Trim().EndsWith("THEN", StringComparison.OrdinalIgnoreCase))
         {
             return ifCondition;
         }
-        // 如果不包含 THEN，添加 THEN（注意：ifCondition 已经包含 IF 关键字）
+        // 如果不包含 THEN，添加 THEN
         return $"{ifCondition.Trim()} THEN ";
     }
     #endregion
@@ -1516,9 +1883,28 @@ public abstract class PostgreSqlScriptGenerator
         bool isCursorDeclaration = tokens.Any(t => t.TokenType == TSqlTokenType.Cursor);
         if (isCursorDeclaration)
         {
-            // 游标声明需要保留在SQL中，以便后续的游标循环转换可以找到完整的模式
-            // 直接返回原始SQL（不进行任何转换）
-            return string.Concat(tokens.Select(t => t.Text));
+            // T-SQL: DECLARE name CURSOR [LOCAL] ... FOR select ...
+            // PL/pgSQL: name CURSOR FOR select ... (in declare block) OR OPEN name FOR select ... (in body)
+            // 这里我们转换为 OPEN name FOR select ... 
+            // 假设游标变量已经在声明部分处理（或者需要用户自行添加 REFCURSOR 定义）
+            
+            // 1. 查找 Cursor 名称 (DECLARE 之后, CURSOR 之前)
+            var cursorToken = tokens.FirstOrDefault(t => t.TokenType == TSqlTokenType.Identifier || t.TokenType == TSqlTokenType.QuotedIdentifier);
+            if (cursorToken == null) return string.Empty;
+            
+            var cursorName = cursorToken.Text.ToPostgreSqlIdentifier();
+
+            // 2. 查找 FOR 关键字
+            var forIndex = tokens.ToList().FindIndex(t => t.TokenType == TSqlTokenType.For);
+            if (forIndex < 0) return string.Empty; // 应该不会发生，除非语法错误
+
+            // 3. 取出 FOR 之后的 Select 语句
+            var selectTokens = tokens.Skip(forIndex + 1).ToList();
+            var selectSql = ConvertAllSqlAndSqlBatch(selectTokens);
+
+            // 4. 构建 OPEN 语句
+            _cursorsOpenedInDeclare.Add(cursorName);
+            return $"OPEN {cursorName} FOR {selectSql}";
         }
 
         //检查是否有等号，没有等号则不处理（变量定义已经在存储过程的DECLARE部分处理过了）
@@ -1608,6 +1994,371 @@ public abstract class PostgreSqlScriptGenerator
     protected virtual string GetSqlContentBeforeEndFile()
     {
         return "";
+    }
+    #endregion
+
+    #region 转换 While, Open, Fetch, Close, Deallocate
+    protected virtual string ConvertWhileSql(IList<TSqlParserToken> tokens)
+    {
+        // T-SQL: WHILE boolean_expression { sql_statement | statement_block | BREAK | CONTINUE }
+        // PL/PG: WHILE boolean-expression LOOP statements END LOOP;
+        
+        // 1. 提取条件
+        // 条件通常在 WHILE 之后，直到 BEGIN 或 语句开头
+        int i = 0;
+        // Skip WHILE
+        if (tokens[i].TokenType == TSqlTokenType.While) i++;
+        
+        var conditionTokens = new List<TSqlParserToken>();
+        var bodyTokens = new List<TSqlParserToken>();
+        bool hasBegin = false;
+        
+        // 简单策略：扫描直到遇到 BEGIN，或者是单个语句
+        // 如果条件中有 @@FETCH_STATUS，我们需要特殊处理
+        
+        var beginIndex = tokens.ToList().FindIndex(t => t.TokenType == TSqlTokenType.Begin);
+        
+        if (beginIndex > 0)
+        {
+            conditionTokens = tokens.Skip(1).Take(beginIndex - 1).ToList();
+            hasBegin = true;
+            bodyTokens = tokens.Skip(beginIndex + 1).Take(tokens.Count - beginIndex - 2).ToList(); // Remove BEGIN ... END
+        }
+        else
+        {
+            // 没找到 BEGIN，可能是单行语句，比较难分割，这里简化假设必须有BEGIN...END块（大部分存储过程都是）
+            // 如果遇到这种情况，可能需要更复杂的解析，暂时把剩下的全部当作条件（错误）或...
+            // 实际上 T-SQL While 后面紧跟条件，直到遇到保留字（如 UPDATE, INSERT, SET...）或者 BEGIN
+            // 我们暂且假设 conditions 不包含换行符（不严谨），或者简单地取前半部分？
+            // 更好的方法：使用 GetIfConditionOnly 类似的逻辑？
+            var dummyIdx = 1;
+            // 这是一个假设的方法调用，我们需要实现或者模拟 GetConditionOnly
+             // 由于 GetIfConditionOnly 是特定于 IF 的，我们无法直接复用，但逻辑类似
+             // 暂时简单处理：取第一个 Token 之后的 tokens 作为条件，直到换行？不，While 条件可能跨行
+             // 观察到用户代码： WHILE @@FETCH_STATUS = 0 \r\n BEGIN ...
+             
+             // 尝试找到换行或者关键字
+             for(int k=1; k<tokens.Count;k++)
+             {
+                 if(tokens[k].TokenType == TSqlTokenType.Begin)
+                 {
+                     beginIndex = k;
+                     break;
+                 }
+             }
+             if (beginIndex > 0)
+             {
+                  conditionTokens = tokens.Skip(1).Take(beginIndex - 1).ToList();
+                  hasBegin = true;
+                  // Handle BEGIN...END (last token is END)
+                  bodyTokens = tokens.Skip(beginIndex + 1).Take(tokens.Count - beginIndex - 2).ToList();
+             }
+             else
+             {
+                 // 单条语句: WHILE cond stmt;
+                 // 很难区分 cond 和 stmt。
+                 // 既然用户案例有 BEGIN，我们先只支持 BEGIN 模式，或者把所有剩余当作 body? 
+                 // 这样会导致语法错误。
+                 // 让我们尝试查找第一个分号？T-SQL WHILE 通常不带分号。
+                 // 让我们查找 boolean expression 的结束。
+                 // 为了安全，如果没找到 BEGIN，我们把 tokens[1] 到结尾都拼凑回去（不做 Loop 转换，避免破坏）
+                 return ConvertUnknownSql(tokens);
+             }
+        }
+        
+        // 转换条件
+        var sbCondition = new StringBuilder();
+        foreach (var t in conditionTokens)
+        {
+            if (string.Equals(t.Text, "@@FETCH_STATUS", StringComparison.OrdinalIgnoreCase))
+            {
+                sbCondition.Append("v_fetch_status");
+            }
+            else if (t.TokenType == TSqlTokenType.Variable)
+            {
+                sbCondition.Append(t.Text.ToPostgreVariableName());
+            }
+            else
+            {
+                sbCondition.Append(t.Text);
+            }
+        }
+        var condition = sbCondition.ToString().Trim();
+
+        var sb = new StringBuilder();
+        sb.Append($"WHILE {condition} LOOP");
+        sb.AppendLine();
+        sb.Append(ConvertAllSqlAndSqlBatch(bodyTokens));
+        sb.AppendLine("END LOOP;");
+        return sb.ToString();
+    }
+
+    protected virtual string ConvertOpenSql(IList<TSqlParserToken> tokens)
+    {
+        // T-SQL: OPEN cursor_name
+        // PG: OPEN cursor_name
+        // 只需要处理标识符
+        var sb = new StringBuilder();
+        string cursorName = null;
+        
+        foreach (var t in tokens)
+        {
+             if (t.TokenType == TSqlTokenType.Identifier || t.TokenType == TSqlTokenType.QuotedIdentifier)
+             {
+                 cursorName = t.Text.ToPostgreSqlIdentifier();
+                 break; // 假设只有一个标识符即游标名
+             }
+        }
+        
+        if (!string.IsNullOrEmpty(cursorName) && _cursorsOpenedInDeclare.Contains(cursorName))
+        {
+            return $"-- OPEN {cursorName}; -- Ignored (Opened in DECLARE)";
+        }
+
+        foreach (var t in tokens)
+        {
+             if (t.TokenType == TSqlTokenType.Identifier || t.TokenType == TSqlTokenType.QuotedIdentifier)
+             {
+                 sb.Append(t.Text.ToPostgreSqlIdentifier());
+             }
+             else if (t.TokenType == TSqlTokenType.WhiteSpace)
+             {
+                 sb.Append(t.Text);
+             }
+             else
+             {
+                 sb.Append(t.Text);
+             }
+        }
+        sb.AppendIfMissing(';');
+        return sb.ToString();
+    }
+
+    protected virtual string ConvertFetchSql(IList<TSqlParserToken> tokens)
+    {
+        // T-SQL: FETCH NEXT FROM cursor INTO @v1, @v2
+        // PG: FETCH cursor INTO v1, v2;
+        // 此外，为了模拟 @@FETCH_STATUS，我们需要在 FETCH 后注入:
+        // IF NOT FOUND THEN v_fetch_status := -1; ELSE v_fetch_status := 0; END IF;
+        
+        var sb = new StringBuilder();
+        sb.Append("FETCH ");
+        
+        // 提取游标名和变量
+        // Skip FETCH
+        // Skip NEXT, PRIOR, etc.
+        // Skip FROM
+        
+        int i = 0; 
+        if (tokens[i].TokenType == TSqlTokenType.Fetch) i++;
+        
+        // Skipping direction and FROM Keywords
+        bool foundCursor = false;
+        
+        for(; i < tokens.Count; i++)
+        {
+            var t = tokens[i];
+            if (string.Equals(t.Text, "NEXT", StringComparison.OrdinalIgnoreCase) || 
+                string.Equals(t.Text, "PRIOR", StringComparison.OrdinalIgnoreCase) || 
+                string.Equals(t.Text, "FIRST", StringComparison.OrdinalIgnoreCase) || 
+                string.Equals(t.Text, "LAST", StringComparison.OrdinalIgnoreCase) || 
+                string.Equals(t.Text, "ABSOLUTE", StringComparison.OrdinalIgnoreCase) || 
+                string.Equals(t.Text, "RELATIVE", StringComparison.OrdinalIgnoreCase))
+            {
+               // PG 支持 Direction，如果用户用了 NEXT，我们可以忽略（默认），如果用了其他，应该保留？
+               // FETCH NEXT is default in PG too.
+               // 我们简单起见，忽略方向词，使用默认 NEXT
+               continue;
+            }
+            if (t.TokenType == TSqlTokenType.From)
+            {
+                continue;
+            }
+            
+            // Cursor Name
+            if (!foundCursor && (t.TokenType == TSqlTokenType.Identifier || t.TokenType == TSqlTokenType.QuotedIdentifier))
+            {
+                sb.Append(t.Text.ToPostgreSqlIdentifier());
+                foundCursor = true;
+                continue;
+            }
+            
+            // INTO keyword
+            if (t.TokenType == TSqlTokenType.Into)
+            {
+                sb.Append(" INTO ");
+                continue;
+            }
+            
+            // Variables
+            if (t.TokenType == TSqlTokenType.Variable)
+            {
+                sb.Append(t.Text.ToPostgreVariableName());
+                continue;
+            }
+            
+            // Other (Comma, whitespace)
+            sb.Append(t.Text);
+        }
+        
+        sb.AppendIfMissing(';');
+        
+        // 注入状态模拟代码
+        sb.AppendLine();
+        sb.AppendLine("IF NOT FOUND THEN v_fetch_status := -1; ELSE v_fetch_status := 0; END IF;");
+        
+        return sb.ToString();
+    }
+
+    protected virtual string ConvertCloseSql(IList<TSqlParserToken> tokens)
+    {
+        // T-SQL: CLOSE cursor_name
+        // PG: CLOSE cursor_name;
+        var sb = new StringBuilder();
+        foreach (var t in tokens)
+        {
+             if (t.TokenType == TSqlTokenType.Identifier || t.TokenType == TSqlTokenType.QuotedIdentifier)
+             {
+                 sb.Append(t.Text.ToPostgreSqlIdentifier());
+             }
+             else if (t.TokenType == TSqlTokenType.WhiteSpace)
+             {
+                 sb.Append(t.Text);
+             }
+             else
+             {
+                 sb.Append(t.Text);
+             }
+        }
+        sb.AppendIfMissing(';');
+        return sb.ToString();
+    }
+
+    protected virtual string ConvertDeallocateSql(IList<TSqlParserToken> tokens)
+    {
+        // T-SQL: DEALLOCATE cursor_name
+        // PG: CLOSE cursor_name; (PG doesn't have deallocate for cursors opened in PL/pgSQL, they assume Close is enough or rely on transaction end)
+        // 实际上 DEALLOCATE 用于 Prepared Statements. 对于 Cursors, CLOSE 足够。
+        // 为了安全，我们可以转换为 CLOSE，或者注释掉。
+        // 如果前面已经 CLOSE 了，这里再次 CLOSE 可能会报错？
+        // PG 允许重复 CLOSE 吗？
+        // 简单起见，我们将 DEALLOCATE 转换为 NULL; -- Deallocate ignored
+        // 或者保留 DEALLOCATE 并注释
+        return $"-- {string.Concat(tokens.Select(t => t.Text))}"; 
+    }
+    #endregion
+
+    #region 转换Set语句
+    /// <summary>
+    /// 转换Set语句
+    /// 处理变量赋值，如SET @var = 1
+    /// 处理字符串拼接，如SET @var = 'a' + 'b' -> var := concat('a', 'b')
+    /// </summary>
+    /// <param name="tokens"></param>
+    /// <returns></returns>
+    protected virtual string ConvertSetSql(IList<TSqlParserToken> tokens)
+    {
+        var sb = new StringBuilder();
+        // Skip SET
+        var varIndex = tokens.FindFirstIndex(t => t.TokenType == TSqlTokenType.Variable);
+        if (varIndex < 0) return ConvertUnknownSql(tokens);
+
+        var variableName = tokens[varIndex].Text.ToPostgreVariableName();
+        sb.Append(variableName);
+
+        // Find assignment operator
+        var assignIndex = tokens.FindFirstIndex(t => t.TokenType == TSqlTokenType.EqualsSign || t.Text == "+=", varIndex + 1);
+        if (assignIndex < 0) return ConvertUnknownSql(tokens); // Should not happen for valid SET
+
+        sb.Append(" := "); // PL/pgSQL assignment
+
+        // Process expression (everything after assignment)
+        var exprTokens = tokens.Skip(assignIndex + 1).ToList();
+        // 移除末尾的分号，因为后面会统一添加
+        if(exprTokens.Count > 0 && exprTokens.Last().TokenType == TSqlTokenType.Semicolon)
+        {
+            exprTokens.RemoveAt(exprTokens.Count - 1);
+        }
+
+        // If usage is +=, we need to prepend the variable itself to the expression
+        if (tokens[assignIndex].Text == "+=")
+        {
+            var newExprTokens = new List<TSqlParserToken>();
+            newExprTokens.Add(tokens[varIndex]); // The variable itself
+            newExprTokens.Add(new TSqlParserToken(TSqlTokenType.Plus, "+")); // The plus operator
+            newExprTokens.AddRange(exprTokens);
+            exprTokens = newExprTokens;
+        }
+
+        // Check if expression implies string operation
+        // Heuristic: if contains string literal, treat as string concatenation
+        bool treatAsString = exprTokens.Any(t => t.TokenType == TSqlTokenType.AsciiStringLiteral || t.TokenType == TSqlTokenType.UnicodeStringLiteral);
+
+        if (treatAsString)
+        {
+            sb.Append(ConvertStringConcatenation(exprTokens));
+        }
+        else
+        {
+            // Just standard conversion (variables, etc)
+            foreach (var t in exprTokens)
+            {
+                if (t.TokenType == TSqlTokenType.Variable) sb.Append(t.Text.ToPostgreVariableName());
+                else sb.Append(t.Text);
+            }
+        }
+
+        sb.AppendIfMissing(';');
+        return sb.ToString();
+    }
+
+    private string ConvertStringConcatenation(IList<TSqlParserToken> tokens)
+    {
+        var parts = new List<string>();
+        var currentPart = new StringBuilder();
+        int depth = 0;
+        
+        // Helper to flush current part
+        Action flushPart = () => {
+            if (currentPart.Length > 0)
+            {
+                parts.Add(currentPart.ToString());
+                currentPart.Clear();
+            }
+        };
+
+        for (int i = 0; i < tokens.Count; i++)
+        {
+            var t = tokens[i];
+            
+            if (t.TokenType == TSqlTokenType.LeftParenthesis) depth++;
+            if (t.TokenType == TSqlTokenType.RightParenthesis) depth--;
+
+            // Split by + at top level
+            if (depth == 0 && t.TokenType == TSqlTokenType.Plus)
+            {
+                flushPart();
+                continue;
+            }
+
+            // Process token text
+            if (t.TokenType == TSqlTokenType.Variable)
+            {
+                currentPart.Append(t.Text.ToPostgreVariableName());
+            }
+
+            else
+            {
+                currentPart.Append(t.Text);
+            }
+        }
+        flushPart();
+
+        if (parts.Count == 0) return "''";
+        if (parts.Count == 1) return parts[0];
+
+        // Format as CONCAT(part1, part2, ...)
+        return $"CONCAT({string.Join(", ", parts)})";
     }
     #endregion
 }

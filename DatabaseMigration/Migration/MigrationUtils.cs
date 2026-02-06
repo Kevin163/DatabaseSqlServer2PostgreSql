@@ -115,6 +115,7 @@ public static class MigrationUtils
             case "tinyint": return "smallint";
             case "time": return "time";
             case "uniqueidentifier": return "uuid";
+            case "refcursor": return "refcursor";
             default: return "text";
         }
     }

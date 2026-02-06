@@ -682,6 +682,208 @@ public static class ListTSqlParserTokenExtension
         return result;
     }
     /// <summary>
+    /// 处理类似DATEDIFF(MI, cDate, GETDATE())的语句，转换为 EXTRACT(EPOCH FROM (endDate - startDate)) / 60
+    /// SQL Server: DATEDIFF(datepart, startdate, enddate) - 返回 enddate - startdate 的差值
+    /// PostgreSQL: EXTRACT(EPOCH FROM (enddate - startdate)) / divisor
+    /// </summary>
+    /// <param name="tokens"></param>
+    /// <param name="i"></param>
+    /// <returns></returns>
+    public static string GetDateDiffSql(this IList<TSqlParserToken> tokens, ref int i)
+    {
+        // 确保指定索引的token是'DATEDIFF'
+        if (tokens == null || i < 0 || i >= tokens.Count) return string.Empty;
+        var curr = tokens[i];
+
+        if (!(curr.TokenType == TSqlTokenType.Identifier && curr.Text.Equals("DATEDIFF", StringComparison.OrdinalIgnoreCase)))
+        {
+            return string.Empty;
+        }
+
+        // 查找最近一个左括号的索引
+        int openIdx = -1;
+        for (int k = i + 1; k < tokens.Count; k++)
+        {
+            if (tokens[k].Text == "(") { openIdx = k; break; }
+        }
+        if (openIdx < 0) { i = i + 1; return "DATEDIFF"; }
+
+        var partSb = new StringBuilder();
+        var startDateSb = new StringBuilder();
+        var endDateSb = new StringBuilder();
+
+        int depth = 0;
+        int phase = 0; // 0: parsing datepart, 1: parsing startdate, 2: parsing enddate
+        int endIdx = openIdx;
+
+        for (int k = openIdx + 1; k < tokens.Count; k++)
+        {
+            var t = tokens[k].Text;
+
+            if (t == "(")
+            {
+                depth++;
+                if (phase == 0) partSb.Append(t);
+                else if (phase == 1) startDateSb.Append(t);
+                else endDateSb.Append(t);
+                continue;
+            }
+            if (t == ")")
+            {
+                if (depth == 0)
+                {
+                    endIdx = k;
+                    break;
+                }
+                depth--;
+                if (phase == 0) partSb.Append(t);
+                else if (phase == 1) startDateSb.Append(t);
+                else endDateSb.Append(t);
+                continue;
+            }
+
+            if (t == "," && depth == 0)
+            {
+                if (phase == 0)
+                {
+                    phase = 1;
+                    continue;
+                }
+                else if (phase == 1)
+                {
+                    phase = 2;
+                    continue;
+                }
+            }
+
+            if (phase == 0) partSb.Append(t);
+            else if (phase == 1) startDateSb.Append(t);
+            else endDateSb.Append(t);
+        }
+
+        i = endIdx;
+
+        var partStr = partSb.ToString().Trim();
+        var startDateStr = startDateSb.ToString().Trim();
+        var endDateStr = endDateSb.ToString().Trim();
+
+        // 转换日期表达式中的 GETDATE() 为 NOW()
+        string pgStartDate = ConvertDateExpression(startDateStr);
+        string pgEndDate = ConvertDateExpression(endDateStr);
+
+        // 解析日期部分并确定除数
+        string partKey = partStr;
+        if ((partKey.StartsWith("'") && partKey.EndsWith("'")) || (partKey.StartsWith("\"") && partKey.EndsWith("\"")))
+            partKey = partKey.Substring(1, partKey.Length - 2);
+        partKey = partKey.Trim().ToLowerInvariant();
+
+        // 计算除数
+        double divisor;
+        switch (partKey)
+        {
+            case "yy":
+            case "yyyy":
+            case "year":
+                // 年差使用天数/365近似
+                divisor = 365.0 * 24 * 60 * 60;
+                break;
+            case "qq":
+            case "quarter":
+                // 季度差使用天数/90近似
+                divisor = 90.0 * 24 * 60 * 60;
+                break;
+            case "mm":
+            case "m":
+            case "month":
+                // 月差使用天数/30近似
+                divisor = 30.0 * 24 * 60 * 60;
+                break;
+            case "day":
+            case "dd":
+            case "d":
+            case "dy":
+            case "dayofyear":
+                divisor = 24.0 * 60 * 60; // 秒转天
+                break;
+            case "week":
+            case "wk":
+            case "ww":
+                divisor = 7.0 * 24 * 60 * 60; // 秒转周
+                break;
+            case "hour":
+            case "hh":
+                divisor = 60.0 * 60; // 秒转小时
+                break;
+            case "minute":
+            case "mi":
+            case "n":
+                divisor = 60.0; // 秒转分钟
+                break;
+            case "second":
+            case "ss":
+            case "s":
+                divisor = 1.0; // 直接返回秒数
+                break;
+            case "ms":
+            case "millisecond":
+                divisor = 0.001; // 秒转毫秒
+                break;
+            default:
+                divisor = 1.0;
+                break;
+        }
+
+        // 构建PostgreSQL表达式
+        // EXTRACT(EPOCH FROM (enddate - startdate)) / divisor
+        string result;
+        if (Math.Abs(divisor - 1.0) < 0.0001)
+        {
+            result = $"EXTRACT(EPOCH FROM ({pgEndDate} - {pgStartDate}))::integer";
+        }
+        else if (Math.Abs(divisor - 0.001) < 0.00001)
+        {
+            result = $"(EXTRACT(EPOCH FROM ({pgEndDate} - {pgStartDate})) * 1000)::integer";
+        }
+        else
+        {
+            result = $"(EXTRACT(EPOCH FROM ({pgEndDate} - {pgStartDate})) / {divisor})::integer";
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// 转换日期表达式，将GETDATE()等转换为PostgreSQL等价表达式
+    /// </summary>
+    private static string ConvertDateExpression(string expr)
+    {
+        if (string.IsNullOrWhiteSpace(expr)) return "NOW()";
+        
+        var trimmed = expr.Trim();
+        
+        // 处理 GETDATE() 或 GETDATE
+        if (trimmed.IndexOf("GETDATE", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            return System.Text.RegularExpressions.Regex.Replace(
+                trimmed, 
+                @"GETDATE\s*\(\s*\)", 
+                "NOW()", 
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        }
+        
+        // 处理 GETUTCDATE()
+        if (trimmed.IndexOf("GETUTCDATE", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            return System.Text.RegularExpressions.Regex.Replace(
+                trimmed, 
+                @"GETUTCDATE\s*\(\s*\)", 
+                "TIMEZONE('UTC', NOW())", 
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        }
+        
+        return trimmed;
+    }
+    /// <summary>
     /// 获取所有的DeclareItem，包括变量声明和游标声明
     /// </summary>
     /// <param name="tokens"></param>
@@ -715,6 +917,19 @@ public static class ListTSqlParserTokenExtension
                     }
                     if (curr.TokenType == TSqlTokenType.Identifier || curr.TokenType == TSqlTokenType.QuotedIdentifier)
                     {
+                        // 检查是否是游标声明: DECLARE name CURSOR
+                        // 当前是 Identifier (name), 下一个是 Cursor
+                        var nextTokenType = tokens.GetFirstNotWhiteSpaceTokenTypeFromIndex(j + 1);
+                        if (nextTokenType == TSqlTokenType.Cursor)
+                        {
+                            result.Add(new DeclareItem
+                            {
+                                Name = curr.Text.ToPostgreSqlIdentifier(),
+                                TypeText = "refcursor"
+                            });
+                            break; 
+                        }
+
                         typeText.Append(curr.Text);
                         // 如果后面是左括号，则继续向后查找，直到找到对应的右括号
                         var next = tokens.Count > j + 1 ? tokens[j + 1] : null;

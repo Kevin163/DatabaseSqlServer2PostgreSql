@@ -24,7 +24,17 @@ public class PostgreSqlProcedureScriptGenerator : PostgreSqlScriptGenerator
     public override string GenerateSqlScript(TSqlFragment fragment)
     {
         _declareItems = fragment.ScriptTokenStream.GetAllDealreItems();
+        
+        // 如果脚本中包含 FETCH 语句，则注入 v_fetch_status 变量声明，用于模拟 FETCH_STATUS
+        if (fragment.ScriptTokenStream.Any(t => t.TokenType == TSqlTokenType.Fetch))
+        {
+             _declareItems.Add(new DeclareItem { Name = "v_fetch_status", TypeText = "int" });
+        }
+
+
+
         _hasAddedBegin = false; // 重置标志
+        _cursorsOpenedInDeclare.Clear(); // 重置已转换的游标集合
         return GenerateSqlScript(fragment.ScriptTokenStream);
     }
 

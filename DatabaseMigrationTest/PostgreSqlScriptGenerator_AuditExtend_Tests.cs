@@ -157,4 +157,19 @@ end
             // Assert.DoesNotContain("#temp_list_retry", result);
         }
     }
+    [Fact]
+    public void ConvertSetStringConcatenation_ShouldUseConcat()
+    {
+        var tsql = "SET @url = 'http://' + @host + '/path';";
+        var fragment = tsql.ParseToFragment();
+        var generator = new PostgreSqlProcedureScriptGenerator(); // Use Procedure generator to cover all bases or base generator
+        var result = generator.GenerateSqlScript(fragment);
+        
+        // Expected: url := CONCAT('http://', host, '/path');
+        Assert.Contains("url :=", result);
+        Assert.Contains("CONCAT(", result);
+        Assert.Contains("'http://'", result);
+        Assert.Contains("host", result);
+        Assert.DoesNotContain(" + ", result); // Check regarding spaces around + 
+    }
 }
