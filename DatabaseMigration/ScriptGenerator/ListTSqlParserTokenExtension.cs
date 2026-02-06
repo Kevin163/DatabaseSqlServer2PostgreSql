@@ -49,6 +49,27 @@ public static class ListTSqlParserTokenExtension
         return TSqlTokenType.WhiteSpace;
     }
     /// <summary>
+    /// 从指定索引开始，反向获取第一个非空白的Token，如果全部是空白，则返回null
+    /// </summary>
+    /// <param name="tokens"></param>
+    /// <param name="index"></param>
+    /// <param name="skipComment"></param>
+    /// <returns></returns>
+    public static TSqlParserToken? GetPreviousFirstNotWhiteSpaceTokenFromIndex(this IList<TSqlParserToken> tokens, int index, bool skipComment = false)
+    {
+        for (var i = index; i >=0; i--)
+        {
+            var tk = tokens[i];
+            if (tk.TokenType != TSqlTokenType.WhiteSpace)
+            {
+                if (skipComment && (tk.TokenType == TSqlTokenType.MultilineComment || tk.TokenType == TSqlTokenType.SingleLineComment))
+                    continue;
+                return tk;
+            }
+        }
+        return null;
+    }
+    /// <summary>
     /// 查找符合条件的第一个Token的索引，如果没有找到则返回-1
     /// </summary>
     /// <param name="tokens"></param>
@@ -661,7 +682,7 @@ public static class ListTSqlParserTokenExtension
         return result;
     }
     /// <summary>
-    /// 获取所有的DeclareItem
+    /// 获取所有的DeclareItem，包括变量声明和游标声明
     /// </summary>
     /// <param name="tokens"></param>
     /// <returns></returns>
@@ -675,10 +696,10 @@ public static class ListTSqlParserTokenExtension
             var tk = tokens[i];
             string name = "";
             var typeText = new StringBuilder(30);
+
             if (tk.TokenType == TSqlTokenType.Declare)
             {
-                //处理declare @pkname varchar(200)这样的语句，其中的@pkname类型是Variable，varchar是Identifier
-                //找到第一个Identifier
+                // 处理DECLARE语句
                 int j = i + 1;
                 for (; j < count; j++)
                 {
@@ -687,10 +708,15 @@ public static class ListTSqlParserTokenExtension
                     {
                         name = curr.Text.ToPostgreVariableName();
                     }
+                    if (curr.TokenType == TSqlTokenType.Cursor)
+                    {
+                        // PostgreSQL 中的 cursor 不需要在 DECLARE 部分定义，直接忽略
+                        break;
+                    }
                     if (curr.TokenType == TSqlTokenType.Identifier || curr.TokenType == TSqlTokenType.QuotedIdentifier)
                     {
                         typeText.Append(curr.Text);
-                        //如果后面是左括号，则继续向后查找，直到找到对应的右括号
+                        // 如果后面是左括号，则继续向后查找，直到找到对应的右括号
                         var next = tokens.Count > j + 1 ? tokens[j + 1] : null;
                         if (next != null && next.TokenType == TSqlTokenType.LeftParenthesis)
                         {
@@ -714,13 +740,22 @@ public static class ListTSqlParserTokenExtension
                             result.Add(new DeclareItem
                             {
                                 Name = name,
-                                TypeText = typeText.ToString()
+                                TypeText = typeText.ToString(),
                             });
+                            // 处理DECLARE @id varchar(50), @hid char(6)...这种一次性定义多个变量的情况
+                            var nextNonEmptyTokenType = tokens.GetFirstNotWhiteSpaceTokenTypeFromIndex(j + 2, skipComment: true);
+                            if (nextNonEmptyTokenType == TSqlTokenType.Comma)
+                            {
+                                name = "";
+                                typeText.Clear();
+                                continue;
+                            }
+                            // 如果已经处理完，则退出当前DECLARE语句
                             break;
                         }
                     }
                 }
-                i = j; //更新i的位置
+                i = j; // 更新i的位置
             }
         }
         return result;

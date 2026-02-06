@@ -130,10 +130,22 @@ public abstract class PostgreSqlScriptGenerator
         {
             return ConvertCreateTableSql(tokens);
         }
-        //如果是create index语句，则进行特殊处理
+        //如果是create index语句，则进行特殊处理（包括 NONCLUSTERED INDEX）
         if (nextTokenType == TSqlTokenType.Index)
         {
             return ConvertCreateIndexSql(tokens);
+        }
+        //检查是否是 CREATE NONCLUSTERED INDEX 的情况
+        //检查第一个非空token的文本是否为 NONCLUSTERED
+        var firstNonWhiteSpaceIndex = nextTokens.FindIndex(t => t.TokenType != TSqlTokenType.WhiteSpace);
+        if (firstNonWhiteSpaceIndex >= 0 && nextTokens[firstNonWhiteSpaceIndex].Text.Trim().Equals("NONCLUSTERED", StringComparison.OrdinalIgnoreCase))
+        {
+            //跳过 NONCLUSTERED，检查下一个是否是 INDEX
+            var afterNonClustered = nextTokens.Skip(firstNonWhiteSpaceIndex + 1).ToList();
+            if (afterNonClustered.GetFirstNotWhiteSpaceTokenType() == TSqlTokenType.Index)
+            {
+                return ConvertCreateIndexSql(tokens);
+            }
         }
 
         //如果是create ... as语句，则分两部分进行处理
@@ -453,11 +465,13 @@ public abstract class PostgreSqlScriptGenerator
     private string ConvertCreateIndexSql(IList<TSqlParserToken> tokens)
     {
         var sb = new StringBuilder();
+        var lastTokenWasWhiteSpace = false;
         foreach(var tk in tokens)
         {
             if(tk.TokenType == TSqlTokenType.Identifier)
             {
                 sb.Append(tk.Text.ToPostgreSqlIdentifier());
+                lastTokenWasWhiteSpace = false;
                 continue;
             }
             //如果是换行符，则忽略
@@ -465,7 +479,18 @@ public abstract class PostgreSqlScriptGenerator
             {
                 continue;
             }
+            //如果是 NONCLUSTERED 关键字，则忽略（PostgreSQL 不支持）
+            if(!string.IsNullOrEmpty(tk.Text) && tk.Text.Trim().Equals("NONCLUSTERED", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+            //跳过连续的空格
+            if(tk.TokenType == TSqlTokenType.WhiteSpace && lastTokenWasWhiteSpace)
+            {
+                continue;
+            }
             sb.Append(tk.Text);
+            lastTokenWasWhiteSpace = tk.TokenType == TSqlTokenType.WhiteSpace;
         }
         sb.AppendIfMissing(';');
         return sb.ToString();
@@ -1251,6 +1276,22 @@ public abstract class PostgreSqlScriptGenerator
     /// <returns></returns>
     protected virtual string ConvertDeclareSql(IList<TSqlParserToken> tokens)
     {
+        // 检查是否是游标声明
+        bool isCursorDeclaration = tokens.Any(t => t.TokenType == TSqlTokenType.Cursor);
+        if (isCursorDeclaration)
+        {
+            // 游标声明需要保留在SQL中，以便后续的游标循环转换可以找到完整的模式
+            // 直接返回原始SQL（不进行任何转换）
+            return string.Concat(tokens.Select(t => t.Text));
+        }
+
+        //检查是否有等号，没有等号则不处理（变量定义已经在存储过程的DECLARE部分处理过了）
+        bool hasEqualsSign = tokens.Any(t => t.TokenType == TSqlTokenType.EqualsSign);
+        if (!hasEqualsSign)
+        {
+            return string.Empty;
+        }
+
         //处理declare @sql varchar(1000) = ''这样的语句
         //处理方式，赋值=前的，只取变量名称，账值=后面的直接拼接
         var foundEqualsSign = false;

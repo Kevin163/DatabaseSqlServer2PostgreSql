@@ -14,6 +14,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 dotnet build DatabaseSqlServer2PostgreSql.sln
 ```
 
+### 运行程序（自动执行迁移）
+
+**重要**：运行程序时必须使用 `--auto` 参数，以便程序能够自动执行迁移而无需手动点击按钮。
+
+```bash
+"DatabaseMigration/bin/Debug/net9.0-windows/DatabaseMigration.exe" --auto
+```
+
 ### 运行所有单元测试
 
 ```bash
@@ -187,7 +195,7 @@ ViewMigrator 使用拓扑排序算法处理视图依赖：
 - **日志**: Serilog
 - **测试**: xUnit 2.5.3
 
-# 修改流程
+## 修改流程
 
 1. 运行程序进行迁移，检查日志文件中是否有记录到迁移错误
 
