@@ -1,5 +1,5 @@
 .vs/
-.claude/
 bin/
 obj/
 NUL
+settings.local.json
