@@ -41,9 +41,34 @@ public abstract class PostgreSqlScriptGenerator
         for (var i = 0; i < len;)
         {
             var singleSqlTokens = sqlTokens.GetFirstCompleteSqlTokens(ref i);
+            // 检查当前 tokens 是否是 UNION 或 UNION ALL
+            // 如果是，则需要移除前面语句末尾的分号
+            var firstTokenType = singleSqlTokens.GetFirstNotWhiteSpaceTokenType();
+            if (firstTokenType == TSqlTokenType.Union)
+            {
+                // 移除 StringBuilder 末尾的分号（如果存在）
+                RemoveTrailingSemicolon(sb);
+            }
             sb.Append(ConvertSingleCompleteSqlAndSqlBatch(singleSqlTokens));
         }
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// 移除 StringBuilder 末尾的分号和可能的空白字符
+    /// </summary>
+    private static void RemoveTrailingSemicolon(StringBuilder sb)
+    {
+        // 从末尾向前查找，跳过空白字符，找到分号则移除
+        var i = sb.Length - 1;
+        while (i >= 0 && char.IsWhiteSpace(sb[i]))
+        {
+            i--;
+        }
+        if (i >= 0 && sb[i] == ';')
+        {
+            sb.Length = i; // 移除分号
+        }
     }
     /// <summary>
     /// 转换单个语句或语句块，默认实现会根据语句的类型调用不同的方法进行处理，子类可以重写此方法以实现更复杂的转换逻辑
